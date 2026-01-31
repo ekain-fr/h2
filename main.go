@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/creack/pty"
+	"github.com/muesli/termenv"
 	"github.com/vito/midterm"
 	"golang.org/x/term"
 )
@@ -29,6 +30,9 @@ func main() {
 	w := &wrapper{}
 	err := w.run(os.Args[1], os.Args[2:]...)
 	if err != nil {
+		if w.quit {
+			return
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
@@ -49,6 +53,7 @@ type wrapper struct {
 	history []string           // command history
 	histIdx int                // current position in history (-1 = typing new)
 	saved   []byte             // saved input when browsing history
+	quit    bool               // true when user pressed Ctrl+Q
 }
 
 func (w *wrapper) run(command string, args ...string) error {
@@ -66,6 +71,18 @@ func (w *wrapper) run(command string, args ...string) error {
 	w.histIdx = -1
 	w.vt = midterm.NewTerminal(rows-2, cols)
 
+	// Detect the real terminal's background color before entering raw mode.
+	// midterm swallows OSC 10/11 color queries from the child, so we detect
+	// it here and pass COLORFGBG so the child knows the theme.
+	if os.Getenv("COLORFGBG") == "" {
+		output := termenv.NewOutput(os.Stdout)
+		colorfgbg := "0;15" // light background default
+		if output.HasDarkBackground() {
+			colorfgbg = "15;0"
+		}
+		os.Setenv("COLORFGBG", colorfgbg)
+	}
+
 	// Start child in a PTY, reserving 2 rows for separator + input bar.
 	w.cmd = exec.Command(command, args...)
 	w.ptm, err = pty.StartWithSize(w.cmd, &pty.Winsize{
@@ -76,6 +93,11 @@ func (w *wrapper) run(command string, args ...string) error {
 		return fmt.Errorf("start command: %w", err)
 	}
 	defer w.ptm.Close()
+
+	// Let midterm forward mode-setting sequences (bracketed paste, cursor
+	// keys, etc.) to the real terminal and respond to DA queries from the child.
+	w.vt.ForwardRequests = os.Stdout
+	w.vt.ForwardResponses = w.ptm
 
 	// Put our terminal into raw mode so we get every keystroke.
 	w.restore, err = term.MakeRaw(fd)
@@ -155,6 +177,7 @@ func (w *wrapper) readInput() {
 
 			switch b {
 			case 0x11: // Ctrl+Q: quit wrapper
+				w.quit = true
 				w.mu.Unlock()
 				w.cmd.Process.Signal(syscall.SIGTERM)
 				return
@@ -334,6 +357,9 @@ func (w *wrapper) deleteWord() {
 func (w *wrapper) renderScreen() {
 	var buf bytes.Buffer
 	buf.WriteString("\033[?25l") // hide cursor during render
+	// Suppress midterm's cursor rendering (reverse video block) since we
+	// manage the real terminal cursor at our input bar.
+	w.vt.CursorVisible = false
 	childRows := w.rows - 2
 	for row := 0; row < childRows; row++ {
 		fmt.Fprintf(&buf, "\033[%d;1H\033[2K", row+1) // position + clear line
