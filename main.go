@@ -73,6 +73,12 @@ func (w *wrapper) run(command string, args ...string) error {
 	}
 	defer w.ptm.Close()
 
+	// Set PTY line discipline to raw mode so characters pass through
+	// without echo or translation (e.g., ICRNL converting \r to \n).
+	if _, err := term.MakeRaw(int(w.ptm.Fd())); err != nil {
+		return fmt.Errorf("set pty raw mode: %w", err)
+	}
+
 	// Put our terminal into raw mode so we get every keystroke.
 	w.restore, err = term.MakeRaw(fd)
 	if err != nil {
@@ -111,6 +117,11 @@ func (w *wrapper) pipeOutput() {
 		n, err := w.ptm.Read(buf)
 		if n > 0 {
 			w.mu.Lock()
+			// Move cursor into the child area before writing output.
+			// Without this, the cursor sits at the input bar (bottom row)
+			// and any child output written there causes the terminal to
+			// scroll, duplicating the status bar.
+			os.Stdout.WriteString("\033[H")
 			os.Stdout.Write(buf[:n])
 			w.renderBar()
 			w.mu.Unlock()
@@ -177,8 +188,12 @@ func (w *wrapper) readInput() {
 			case 0x0D, 0x0A: // Enter: send buffered text to child
 				if len(w.input) > 0 {
 					cmd := string(w.input)
-					w.ptm.Write(w.input)
-					w.ptm.Write([]byte{'\r'})
+					// Send input + carriage return in a single write so the
+					// child receives them atomically.
+					msg := make([]byte, len(w.input)+1)
+					copy(msg, w.input)
+					msg[len(msg)-1] = '\r'
+					w.ptm.Write(msg)
 					w.history = append(w.history, cmd)
 					w.input = w.input[:0]
 				} else {
@@ -315,6 +330,10 @@ func (w *wrapper) deleteWord() {
 // terminal. Must be called with w.mu held.
 func (w *wrapper) renderBar() {
 	var buf bytes.Buffer
+
+	// Ensure the scroll region covers only the child area so that
+	// scrolling never pushes the status bar off-screen.
+	fmt.Fprintf(&buf, "\033[1;%dr", w.rows-2)
 
 	// --- Separator line (second-to-last row) ---
 	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", w.rows-1)
