@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -54,6 +55,8 @@ type wrapper struct {
 	histIdx int                // current position in history (-1 = typing new)
 	saved   []byte             // saved input when browsing history
 	quit    bool               // true when user pressed Ctrl+Q
+	oscFg   string             // cached OSC 10 response (foreground color)
+	oscBg   string             // cached OSC 11 response (background color)
 }
 
 func (w *wrapper) run(command string, args ...string) error {
@@ -71,11 +74,18 @@ func (w *wrapper) run(command string, args ...string) error {
 	w.histIdx = -1
 	w.vt = midterm.NewTerminal(rows-2, cols)
 
-	// Detect the real terminal's background color before entering raw mode.
-	// midterm swallows OSC 10/11 color queries from the child, so we detect
-	// it here and pass COLORFGBG so the child knows the theme.
+	// Detect the real terminal's colors before entering raw mode.
+	// midterm swallows OSC 10/11 color queries from the child, so we
+	// query the real terminal here and cache the responses. When the
+	// child later queries OSC 10/11, we respond with the cached values.
+	output := termenv.NewOutput(os.Stdout)
+	if fg := output.ForegroundColor(); fg != nil {
+		w.oscFg = colorToX11(fg)
+	}
+	if bg := output.BackgroundColor(); bg != nil {
+		w.oscBg = colorToX11(bg)
+	}
 	if os.Getenv("COLORFGBG") == "" {
-		output := termenv.NewOutput(os.Stdout)
 		colorfgbg := "0;15" // light background default
 		if output.HasDarkBackground() {
 			colorfgbg = "15;0"
@@ -137,6 +147,9 @@ func (w *wrapper) pipeOutput() {
 	for {
 		n, err := w.ptm.Read(buf)
 		if n > 0 {
+			// Respond to OSC 10/11 color queries that midterm swallows.
+			w.respondOSCColors(buf[:n])
+
 			w.mu.Lock()
 			w.vt.Write(buf[:n])
 			w.renderScreen()
@@ -146,6 +159,18 @@ func (w *wrapper) pipeOutput() {
 		if err != nil {
 			return
 		}
+	}
+}
+
+// respondOSCColors checks if the child output contains OSC 10 or 11 color
+// queries and responds with the cached real terminal colors. midterm swallows
+// these queries, so we need to handle them ourselves.
+func (w *wrapper) respondOSCColors(data []byte) {
+	if w.oscFg != "" && bytes.Contains(data, []byte("\033]10;?")) {
+		fmt.Fprintf(w.ptm, "\033]10;%s\033\\", w.oscFg)
+	}
+	if w.oscBg != "" && bytes.Contains(data, []byte("\033]11;?")) {
+		fmt.Fprintf(w.ptm, "\033]11;%s\033\\", w.oscBg)
 	}
 }
 
@@ -350,6 +375,22 @@ func (w *wrapper) deleteWord() {
 	for len(w.input) > 0 && w.input[len(w.input)-1] != ' ' {
 		w.input = w.input[:len(w.input)-1]
 	}
+}
+
+// colorToX11 converts a termenv.Color to X11 rgb: format for OSC responses.
+func colorToX11(c termenv.Color) string {
+	switch v := c.(type) {
+	case termenv.RGBColor:
+		hex := string(v)
+		if len(hex) == 7 && hex[0] == '#' {
+			r, _ := strconv.ParseUint(hex[1:3], 16, 8)
+			g, _ := strconv.ParseUint(hex[3:5], 16, 8)
+			b, _ := strconv.ParseUint(hex[5:7], 16, 8)
+			// Convert 8-bit to 16-bit by repeating the byte.
+			return fmt.Sprintf("rgb:%04x/%04x/%04x", r*0x101, g*0x101, b*0x101)
+		}
+	}
+	return ""
 }
 
 // renderScreen renders the virtual terminal's screen buffer to stdout using
