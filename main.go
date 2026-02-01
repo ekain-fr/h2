@@ -390,10 +390,28 @@ func (w *wrapper) renderLine(buf *bytes.Buffer, row int) {
 			lastFormat = f
 		}
 		end := pos + region.Size
-		if end > len(line) {
-			end = len(line)
+
+		// Write content for cells that have actual characters.
+		if pos < len(line) {
+			contentEnd := end
+			if contentEnd > len(line) {
+				contentEnd = len(line)
+			}
+			buf.WriteString(string(line[pos:contentEnd]))
 		}
-		buf.WriteString(string(line[pos:end]))
+
+		// Pad with spaces for cells beyond the content slice.
+		// This preserves background colors set by erase sequences
+		// like \033[K which fill the rest of the line with the
+		// current background color.
+		padStart := len(line)
+		if padStart < pos {
+			padStart = pos
+		}
+		if padStart < end {
+			buf.WriteString(strings.Repeat(" ", end-padStart))
+		}
+
 		pos = end
 	}
 	buf.WriteString("\033[0m")
