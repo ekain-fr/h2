@@ -354,18 +354,49 @@ func (w *wrapper) deleteWord() {
 
 // renderScreen renders the virtual terminal's screen buffer to stdout using
 // absolute cursor positioning. Must be called with w.mu held.
+//
+// We use our own line rendering instead of midterm's RenderLine because
+// RenderLine doesn't emit SGR resets between format regions. This causes
+// background colors to bleed from one region into the next when the new
+// region doesn't explicitly set a background.
 func (w *wrapper) renderScreen() {
 	var buf bytes.Buffer
 	buf.WriteString("\033[?25l") // hide cursor during render
-	// Suppress midterm's cursor rendering (reverse video block) since we
-	// manage the real terminal cursor at our input bar.
-	w.vt.CursorVisible = false
 	childRows := w.rows - 2
 	for row := 0; row < childRows; row++ {
 		fmt.Fprintf(&buf, "\033[%d;1H\033[2K", row+1) // position + clear line
-		w.vt.RenderLine(&buf, row)
+		w.renderLine(&buf, row)
 	}
 	os.Stdout.Write(buf.Bytes())
+}
+
+// renderLine writes one row of the virtual terminal to buf with proper SGR
+// resets between format regions to prevent attribute bleeding.
+func (w *wrapper) renderLine(buf *bytes.Buffer, row int) {
+	if row >= len(w.vt.Content) {
+		return
+	}
+	line := w.vt.Content[row]
+	var pos int
+	var lastFormat midterm.Format
+	for region := range w.vt.Format.Regions(row) {
+		f := region.F
+		if f != lastFormat {
+			// Reset before applying the new format so that attributes
+			// (especially background colors) from the previous region
+			// don't bleed through.
+			buf.WriteString("\033[0m")
+			buf.WriteString(f.Render())
+			lastFormat = f
+		}
+		end := pos + region.Size
+		if end > len(line) {
+			end = len(line)
+		}
+		buf.WriteString(string(line[pos:end]))
+		pos = end
+	}
+	buf.WriteString("\033[0m")
 }
 
 // renderBar draws the separator line and input bar at the bottom of the
