@@ -20,7 +20,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: tui-wrapper <command> [args...]\n")
+		fmt.Fprintf(os.Stderr, "Usage: h2 <command> [args...]\n")
 		fmt.Fprintf(os.Stderr, "\nWraps a TUI application with a persistent input bar.\n")
 		fmt.Fprintf(os.Stderr, "All keyboard input goes to the bottom bar.\n")
 		fmt.Fprintf(os.Stderr, "Press Enter to send the command to the wrapped application.\n")

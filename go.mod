@@ -1,4 +1,4 @@
-module tui-wrapper
+module h2
 
 go 1.24.4
 
