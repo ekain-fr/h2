@@ -63,6 +63,8 @@ type Wrapper struct {
 	DebugKeys   bool     // show debug keystrokes bar
 	DebugKeyBuf []string // most recent keystrokes
 
+	// AgentName is shown in the status bar when set.
+	AgentName string
 	// Output is where terminal output is written. Defaults to os.Stdout.
 	Output io.Writer
 	// InputSrc is where keyboard input is read from. Defaults to os.Stdin.
@@ -775,7 +777,11 @@ func (w *Wrapper) RenderBar() {
 	buf.WriteString(w.ModeBarStyle())
 	help := w.HelpLabel()
 	status := w.StatusLabel()
-	label := " " + w.ModeLabel() + " | " + status
+	label := " " + w.ModeLabel()
+	if w.AgentName != "" {
+		label += " [" + w.AgentName + "]"
+	}
+	label += " | " + status
 
 	// Queue indicator
 	if w.QueueStatus != nil {

@@ -75,7 +75,7 @@ func (d *Daemon) Run() error {
 	}()
 
 	// Set up the wrapper.
-	d.Wrapper = &terminal.Wrapper{}
+	d.Wrapper = &terminal.Wrapper{AgentName: d.Name}
 	d.Wrapper.OnModeChange = func(mode terminal.InputMode) {
 		if mode == terminal.ModePassthrough {
 			d.Queue.Pause()

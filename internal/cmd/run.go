@@ -14,13 +14,13 @@ func newRunCmd() *cobra.Command {
 	var detach bool
 
 	cmd := &cobra.Command{
-		Use:   "run --name=<name> [--detach] -- <command> [args...]",
+		Use:   "run [--name=<name>] [--detach] -- <command> [args...]",
 		Short: "Start a new agent",
-		Long:  "Fork a daemon process running the given command, then attach to it.",
+		Long:  "Fork a daemon process running the given command, then attach to it. If --name is omitted, a random name is generated.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
-				return fmt.Errorf("--name is required")
+				name = daemon.GenerateName()
 			}
 
 			// Fork a daemon process.
@@ -33,12 +33,12 @@ func newRunCmd() *cobra.Command {
 				return nil
 			}
 
-			// Auto-attach.
+			fmt.Fprintf(os.Stderr, "Agent %q started. Attaching...\n", name)
 			return doAttach(name)
 		},
 	}
 
-	cmd.Flags().StringVar(&name, "name", "", "Agent name (required)")
+	cmd.Flags().StringVar(&name, "name", "", "Agent name (auto-generated if omitted)")
 	cmd.Flags().BoolVar(&detach, "detach", false, "Don't auto-attach after starting")
 
 	return cmd
