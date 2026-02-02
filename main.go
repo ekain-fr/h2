@@ -43,26 +43,34 @@ func main() {
 }
 
 type wrapper struct {
-	ptm     *os.File           // PTY master (connected to child process)
-	cmd     *exec.Cmd          // child process
-	mu      sync.Mutex         // guards all terminal writes
-	restore *term.State        // original terminal state for cleanup
-	vt      *midterm.Terminal   // virtual terminal for child output
-	input   []byte             // current command line buffer
-	rows    int                // terminal rows
-	cols    int                // terminal cols
-	history []string           // command history
-	histIdx int                // current position in history (-1 = typing new)
-	saved   []byte             // saved input when browsing history
-	quit    bool               // true when user selected Quit
-	oscFg   string             // cached OSC 10 response (foreground color)
-	oscBg   string             // cached OSC 11 response (background color)
-	lastOut time.Time          // last time child output updated the screen
-	mode    inputMode          // current input mode
-	menuIdx int                // selected menu item
+	ptm     *os.File          // PTY master (connected to child process)
+	cmd     *exec.Cmd         // child process
+	mu      sync.Mutex        // guards all terminal writes
+	restore *term.State       // original terminal state for cleanup
+	vt      *midterm.Terminal // virtual terminal for child output
+	input   []byte            // current command line buffer
+	rows    int               // terminal rows
+	cols    int               // terminal cols
+	history []string          // command history
+	histIdx int               // current position in history (-1 = typing new)
+	saved   []byte            // saved input when browsing history
+	quit    bool              // true when user selected Quit
+	oscFg   string            // cached OSC 10 response (foreground color)
+	oscBg   string            // cached OSC 11 response (background color)
+	lastOut time.Time         // last time child output updated the screen
+	mode    inputMode         // current input mode
+	menuIdx int               // selected menu item
 
-	pendingSlash bool          // awaiting second slash for menu
-	slashTimer   *time.Timer   // timer to promote single slash to passthrough
+	pendingSlash bool        // awaiting second slash for menu
+	slashTimer   *time.Timer // timer to promote single slash to passthrough
+
+	pendingEsc     bool        // awaiting more bytes to disambiguate ESC
+	escTimer       *time.Timer // timer to treat ESC as passthrough exit
+	passthroughEsc []byte      // buffered escape sequence bytes
+
+	childRows   int      // number of rows reserved for the child PTY
+	debugKeys   bool     // show debug keystrokes bar
+	debugKeyBuf []string // most recent keystrokes
 }
 
 type inputMode int
@@ -82,13 +90,19 @@ func (w *wrapper) run(command string, args ...string) error {
 	if err != nil {
 		return fmt.Errorf("get terminal size (is this a terminal?): %w", err)
 	}
-	if rows < 3 {
-		return fmt.Errorf("terminal too small (need at least 3 rows, have %d)", rows)
+	w.debugKeys = isTruthyEnv("H2_DEBUG_KEYS")
+	minRows := 3
+	if w.debugKeys {
+		minRows = 4
+	}
+	if rows < minRows {
+		return fmt.Errorf("terminal too small (need at least %d rows, have %d)", minRows, rows)
 	}
 	w.rows = rows
 	w.cols = cols
 	w.histIdx = -1
-	w.vt = midterm.NewTerminal(rows-2, cols)
+	w.childRows = rows - w.reservedRows()
+	w.vt = midterm.NewTerminal(w.childRows, cols)
 	w.lastOut = time.Now()
 	w.mode = modeMessage
 
@@ -111,10 +125,10 @@ func (w *wrapper) run(command string, args ...string) error {
 		os.Setenv("COLORFGBG", colorfgbg)
 	}
 
-	// Start child in a PTY, reserving 2 rows for separator + input bar.
+	// Start child in a PTY, reserving rows for the separator + input + debug bar.
 	w.cmd = exec.Command(command, args...)
 	w.ptm, err = pty.StartWithSize(w.cmd, &pty.Winsize{
-		Rows: uint16(rows - 2),
+		Rows: uint16(w.childRows),
 		Cols: uint16(cols),
 	})
 	if err != nil {
@@ -210,152 +224,325 @@ func (w *wrapper) readInput() {
 		}
 
 		w.mu.Lock()
-		if w.mode == modePassthrough {
-			// Passthrough mode: send all input to the child until Enter or Escape.
-			for i := 0; i < n; i++ {
-				b := buf[i]
-				switch b {
-				case 0x0D, 0x0A: // Enter ends passthrough
-					w.ptm.Write([]byte{'\r'})
-					w.mode = modeMessage
-					w.renderBar()
-				case 0x1B: // Escape ends passthrough if standalone
-					if i == n-1 {
-						w.mode = modeMessage
-						w.renderBar()
-					} else {
-						w.ptm.Write([]byte{0x1B})
-					}
-				case 0x7F, 0x08: // Backspace
-					w.ptm.Write([]byte{b})
-				default:
-					w.ptm.Write([]byte{b})
-				}
-			}
-			w.mu.Unlock()
-			continue
-		}
-		if w.mode == modeMenu {
-			for i := 0; i < n; {
-				b := buf[i]
-				i++
-				if b == 0x1B {
-					consumed, handled := w.handleEscape(buf[i:n])
-					i += consumed
-					if handled {
-						continue
-					}
-					if i == n {
-						w.mode = modeMessage
-						w.renderBar()
-					}
-					continue
-				}
-				switch b {
-				case 0x0D, 0x0A: // Enter selects
-					w.menuSelect()
-					w.mode = modeMessage
-					w.renderBar()
-				}
-			}
-			w.mu.Unlock()
-			continue
+		if w.debugKeys && n > 0 {
+			w.appendDebugBytes(buf[:n])
+			w.renderBar()
 		}
 		for i := 0; i < n; {
-			b := buf[i]
-			i++
-
-			if w.pendingSlash {
-				w.cancelPendingSlash()
-				if b == '/' {
-					w.mode = modeMenu
-					w.menuIdx = 0
-					w.renderBar()
-					continue
-				}
-				w.mode = modePassthrough
-				w.ptm.Write([]byte{'/'})
-				w.renderBar()
-				// Continue handling this byte in passthrough mode.
-				switch b {
-				case 0x0D, 0x0A:
-					w.ptm.Write([]byte{'\r'})
-					w.mode = modeMessage
-					w.renderBar()
-				case 0x1B:
-					if i == n {
-						w.mode = modeMessage
-						w.renderBar()
-					} else {
-						w.ptm.Write([]byte{0x1B})
-					}
-				default:
-					w.ptm.Write([]byte{b})
-				}
-				continue
-			}
-
-			if b == '/' && len(w.input) == 0 {
-				w.startPendingSlash()
-				w.renderBar()
-				continue
-			}
-
-			// Detect and handle escape sequences.
-			if b == 0x1B {
-				consumed, handled := w.handleEscape(buf[i:n])
-				i += consumed
-				if handled {
-					continue
-				}
-				// Lone Escape with no recognized sequence: ignore.
-				continue
-			}
-
-			switch b {
-			case 0x09: // Tab: send to child (for completion)
-				w.ptm.Write([]byte{'\t'})
-
-			case 0x0D, 0x0A: // Enter: send buffered text to child
-				if len(w.input) > 0 {
-					cmd := string(w.input)
-					// Send text first, then \r after a short delay. The
-					// child's UI framework (React/Ink) batches state updates,
-					// so the submit handler won't see the typed text unless
-					// we let a render cycle complete before sending Enter.
-					w.ptm.Write(w.input)
-					w.history = append(w.history, cmd)
-					w.input = w.input[:0]
-					go func() {
-						time.Sleep(50 * time.Millisecond)
-						w.ptm.Write([]byte{'\r'})
-					}()
-				} else {
-					// Bare enter still forwarded (for confirmation prompts, etc.)
-					w.ptm.Write([]byte{'\r'})
-				}
-				w.histIdx = -1
-				w.saved = nil
-				w.renderBar()
-
-			case 0x7F, 0x08: // Backspace
-				if len(w.input) > 0 {
-					_, size := utf8.DecodeLastRune(w.input)
-					w.input = w.input[:len(w.input)-size]
-					w.renderBar()
-				}
-
+			switch w.mode {
+			case modePassthrough:
+				i = w.handlePassthroughBytes(buf, i, n)
+			case modeMenu:
+				i = w.handleMenuBytes(buf, i, n)
 			default:
-				if b < 0x20 { // Control: forward to child
-					w.ptm.Write([]byte{b})
-				} else { // Printable
-					w.input = append(w.input, b)
-					w.renderBar()
-				}
+				i = w.handleMessageBytes(buf, i, n)
 			}
 		}
 		w.mu.Unlock()
 	}
+}
+
+func (w *wrapper) startPendingEsc() {
+	w.pendingEsc = true
+	if w.escTimer != nil {
+		w.escTimer.Stop()
+	}
+	w.escTimer = time.AfterFunc(50*time.Millisecond, func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.pendingEsc && w.mode == modePassthrough {
+			w.pendingEsc = false
+			w.passthroughEsc = w.passthroughEsc[:0]
+			w.mode = modeMessage
+			w.renderBar()
+		}
+	})
+}
+
+func (w *wrapper) cancelPendingEsc() {
+	if w.escTimer != nil {
+		w.escTimer.Stop()
+	}
+	w.pendingEsc = false
+}
+
+func (w *wrapper) handlePassthroughBytes(buf []byte, start, n int) int {
+	for i := start; i < n; {
+		b := buf[i]
+		if w.pendingEsc {
+			if b != '[' && b != 'O' {
+				w.cancelPendingEsc()
+				w.passthroughEsc = w.passthroughEsc[:0]
+				w.mode = modeMessage
+				w.renderBar()
+				return i
+			}
+			w.cancelPendingEsc()
+			w.passthroughEsc = append(w.passthroughEsc[:0], 0x1B, b)
+			if w.flushPassthroughEscIfComplete() {
+				i++
+				continue
+			}
+			i++
+			continue
+		}
+		if len(w.passthroughEsc) > 0 {
+			w.passthroughEsc = append(w.passthroughEsc, b)
+			if w.flushPassthroughEscIfComplete() {
+				i++
+				continue
+			}
+			i++
+			continue
+		}
+		switch b {
+		case 0x0D, 0x0A: // Enter ends passthrough
+			w.cancelPendingEsc()
+			w.passthroughEsc = w.passthroughEsc[:0]
+			w.ptm.Write([]byte{'\r'})
+			w.mode = modeMessage
+			w.renderBar()
+			i++
+		case 0x1B: // Escape ends passthrough if standalone (after a short delay)
+			w.startPendingEsc()
+			i++
+		case 0x7F, 0x08: // Backspace
+			w.ptm.Write([]byte{b})
+			i++
+		default:
+			w.ptm.Write([]byte{b})
+			i++
+		}
+	}
+	return n
+}
+
+func (w *wrapper) handleMenuBytes(buf []byte, start, n int) int {
+	for i := start; i < n; {
+		b := buf[i]
+		i++
+		if b == 0x1B {
+			consumed, handled := w.handleEscape(buf[i:n])
+			i += consumed
+			if handled {
+				continue
+			}
+			if i == n {
+				w.mode = modeMessage
+				w.renderBar()
+			}
+			continue
+		}
+		switch b {
+		case 0x0D, 0x0A: // Enter selects
+			w.menuSelect()
+			w.mode = modeMessage
+			w.renderBar()
+		}
+	}
+	return n
+}
+
+func (w *wrapper) handleMessageBytes(buf []byte, start, n int) int {
+	for i := start; i < n; {
+		b := buf[i]
+		i++
+
+		if w.pendingSlash {
+			w.cancelPendingSlash()
+			if b == '/' {
+				w.mode = modeMenu
+				w.menuIdx = 0
+				w.renderBar()
+				continue
+			}
+			w.mode = modePassthrough
+			w.ptm.Write([]byte{'/'})
+			w.renderBar()
+			// Continue handling this byte in passthrough mode.
+			switch b {
+			case 0x0D, 0x0A:
+				w.ptm.Write([]byte{'\r'})
+				w.mode = modeMessage
+				w.renderBar()
+			case 0x1B:
+				if i == n {
+					w.mode = modeMessage
+					w.renderBar()
+				} else {
+					w.ptm.Write([]byte{0x1B})
+				}
+			default:
+				w.ptm.Write([]byte{b})
+			}
+			continue
+		}
+
+		if b == '/' && len(w.input) == 0 {
+			w.startPendingSlash()
+			w.renderBar()
+			continue
+		}
+
+		// Detect and handle escape sequences.
+		if b == 0x1B {
+			consumed, handled := w.handleEscape(buf[i:n])
+			i += consumed
+			if handled {
+				continue
+			}
+			// Lone Escape with no recognized sequence: ignore.
+			continue
+		}
+
+		switch b {
+		case 0x09: // Tab: send to child (for completion)
+			w.ptm.Write([]byte{'\t'})
+
+		case 0x0D, 0x0A: // Enter: send buffered text to child
+			if len(w.input) > 0 {
+				cmd := string(w.input)
+				// Send text first, then \r after a short delay. The
+				// child's UI framework (React/Ink) batches state updates,
+				// so the submit handler won't see the typed text unless
+				// we let a render cycle complete before sending Enter.
+				w.ptm.Write(w.input)
+				w.history = append(w.history, cmd)
+				w.input = w.input[:0]
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					w.ptm.Write([]byte{'\r'})
+				}()
+			} else {
+				// Bare enter still forwarded (for confirmation prompts, etc.)
+				w.ptm.Write([]byte{'\r'})
+			}
+			w.histIdx = -1
+			w.saved = nil
+			w.renderBar()
+
+		case 0x7F, 0x08: // Backspace
+			if len(w.input) > 0 {
+				_, size := utf8.DecodeLastRune(w.input)
+				w.input = w.input[:len(w.input)-size]
+				w.renderBar()
+			}
+
+		default:
+			if b < 0x20 { // Control: forward to child
+				w.ptm.Write([]byte{b})
+			} else { // Printable
+				w.input = append(w.input, b)
+				w.renderBar()
+			}
+		}
+	}
+	return n
+}
+
+func (w *wrapper) reservedRows() int {
+	if w.debugKeys {
+		return 3
+	}
+	return 2
+}
+
+func (w *wrapper) flushPassthroughEscIfComplete() bool {
+	if len(w.passthroughEsc) == 0 {
+		return false
+	}
+	if !isEscSequenceComplete(w.passthroughEsc) {
+		return false
+	}
+	if isShiftEnterSequence(w.passthroughEsc) {
+		w.ptm.Write([]byte{'\r'})
+	} else {
+		w.ptm.Write(w.passthroughEsc)
+	}
+	w.passthroughEsc = w.passthroughEsc[:0]
+	return true
+}
+
+func isEscSequenceComplete(seq []byte) bool {
+	if len(seq) < 2 {
+		return false
+	}
+	switch seq[1] {
+	case '[': // CSI
+		final := seq[len(seq)-1]
+		return final >= 0x40 && final <= 0x7E
+	case 'O': // SS3
+		return len(seq) >= 3
+	default:
+		return true
+	}
+}
+
+func isShiftEnterSequence(seq []byte) bool {
+	if len(seq) < 3 {
+		return false
+	}
+	if seq[1] != '[' {
+		return false
+	}
+	final := seq[len(seq)-1]
+	params := string(seq[2 : len(seq)-1])
+	switch final {
+	case '~':
+		return params == "27;2;13" || params == "13;2"
+	case 'u':
+		return params == "13;2"
+	default:
+		return false
+	}
+}
+
+func isTruthyEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *wrapper) appendDebugBytes(data []byte) {
+	for _, b := range data {
+		w.debugKeyBuf = append(w.debugKeyBuf, formatDebugKey(b))
+		if len(w.debugKeyBuf) > 10 {
+			w.debugKeyBuf = w.debugKeyBuf[len(w.debugKeyBuf)-10:]
+		}
+	}
+}
+
+func formatDebugKey(b byte) string {
+	switch b {
+	case 0x1B:
+		return "esc"
+	case 0x0D:
+		return "cr"
+	case 0x0A:
+		return "lf"
+	case 0x09:
+		return "tab"
+	case 0x7F:
+		return "del"
+	}
+	if b < 0x20 {
+		return fmt.Sprintf("0x%02x", b)
+	}
+	if b >= 0x20 && b <= 0x7E {
+		return string([]byte{b})
+	}
+	return fmt.Sprintf("0x%02x", b)
+}
+
+func trimLeftToWidth(s string, width int) string {
+	if width <= 0 || len(s) <= width {
+		return s
+	}
+	start := len(s) - width
+	return s[start:]
 }
 
 // handleEscape processes bytes following an ESC (0x1B). It returns how many
@@ -515,8 +702,7 @@ func colorToX11(c termenv.Color) string {
 func (w *wrapper) renderScreen() {
 	var buf bytes.Buffer
 	buf.WriteString("\033[?25l") // hide cursor during render
-	childRows := w.rows - 2
-	for row := 0; row < childRows; row++ {
+	for row := 0; row < w.childRows; row++ {
 		fmt.Fprintf(&buf, "\033[%d;1H\033[2K", row+1) // position + clear line
 		w.renderLine(&buf, row)
 	}
@@ -575,8 +761,17 @@ func (w *wrapper) renderLine(buf *bytes.Buffer, row int) {
 func (w *wrapper) renderBar() {
 	var buf bytes.Buffer
 
-	// --- Separator line (second-to-last row) ---
-	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", w.rows-1)
+	sepRow := w.rows - 1
+	inputRow := w.rows
+	debugRow := 0
+	if w.debugKeys {
+		sepRow = w.rows - 2
+		inputRow = w.rows - 1
+		debugRow = w.rows
+	}
+
+	// --- Separator line ---
+	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", sepRow)
 	buf.WriteString(w.modeBarStyle())
 	help := w.helpLabel()
 	status := w.statusLabel()
@@ -597,7 +792,7 @@ func (w *wrapper) renderBar() {
 	}
 	buf.WriteString("\033[0m")
 
-	// --- Input line (last row) ---
+	// --- Input line ---
 	prompt := "> "
 	inputStr := string(w.input)
 	maxInput := w.cols - len(prompt)
@@ -610,7 +805,7 @@ func (w *wrapper) renderBar() {
 		displayInput = string(runes[len(runes)-maxInput:])
 		runeCount = maxInput
 	}
-	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", w.rows)
+	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", inputRow)
 	fmt.Fprintf(&buf, "\033[36m%s\033[0m%s", prompt, displayInput)
 
 	// Position cursor at end of input.
@@ -618,7 +813,19 @@ func (w *wrapper) renderBar() {
 	if cursorCol > w.cols {
 		cursorCol = w.cols
 	}
-	fmt.Fprintf(&buf, "\033[%d;%dH", w.rows, cursorCol)
+	fmt.Fprintf(&buf, "\033[%d;%dH", inputRow, cursorCol)
+
+	if w.debugKeys {
+		fmt.Fprintf(&buf, "\033[%d;1H\033[2K", debugRow)
+		debugLabel := w.debugLabel()
+		if len(debugLabel) > w.cols {
+			debugLabel = trimLeftToWidth(debugLabel, w.cols)
+		}
+		buf.WriteString(debugLabel)
+		if pad := w.cols - len(debugLabel); pad > 0 {
+			buf.WriteString(strings.Repeat(" ", pad))
+		}
+	}
 
 	// Ensure cursor is visible.
 	buf.WriteString("\033[?25h")
@@ -687,6 +894,25 @@ func (w *wrapper) modeBarStyle() string {
 	default:
 		return "\033[7m\033[36m" // cyan
 	}
+}
+
+func (w *wrapper) debugLabel() string {
+	prefix := " debug keystrokes: "
+	if len(w.debugKeyBuf) == 0 {
+		return prefix
+	}
+	keys := strings.Join(w.debugKeyBuf, " ")
+	available := w.cols - len(prefix)
+	if available <= 0 {
+		if w.cols > 0 {
+			return prefix[:w.cols]
+		}
+		return ""
+	}
+	if len(keys) > available {
+		keys = keys[len(keys)-available:]
+	}
+	return prefix + keys
 }
 
 func (w *wrapper) helpLabel() string {
@@ -786,16 +1012,21 @@ func (w *wrapper) watchResize(sigCh <-chan os.Signal) {
 	for range sigCh {
 		fd := int(os.Stdin.Fd())
 		cols, rows, err := term.GetSize(fd)
-		if err != nil || rows < 3 {
+		minRows := 3
+		if w.debugKeys {
+			minRows = 4
+		}
+		if err != nil || rows < minRows {
 			continue
 		}
 
 		w.mu.Lock()
 		w.rows = rows
 		w.cols = cols
-		w.vt.Resize(rows-2, cols)
+		w.childRows = rows - w.reservedRows()
+		w.vt.Resize(w.childRows, cols)
 		pty.Setsize(w.ptm, &pty.Winsize{
-			Rows: uint16(rows - 2),
+			Rows: uint16(w.childRows),
 			Cols: uint16(cols),
 		})
 		os.Stdout.WriteString("\033[2J")
