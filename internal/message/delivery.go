@@ -85,9 +85,13 @@ func deliver(cfg DeliveryConfig, msg *Message) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	line := fmt.Sprintf("[h2-message from=%s id=%s priority=%s] Read %s\r",
+	line := fmt.Sprintf("[h2-message from=%s id=%s priority=%s] Read %s",
 		msg.From, msg.ID, msg.Priority, msg.FilePath)
 	cfg.PtyWriter.Write([]byte(line))
+	// Delay before sending Enter so the child's UI framework can process
+	// the typed text before the submit (same pattern as user Enter).
+	time.Sleep(50 * time.Millisecond)
+	cfg.PtyWriter.Write([]byte{'\r'})
 
 	now := time.Now()
 	msg.Status = StatusDelivered
