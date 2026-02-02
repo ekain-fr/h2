@@ -455,7 +455,7 @@ func (w *wrapper) flushPassthroughEscIfComplete() bool {
 		return false
 	}
 	if isShiftEnterSequence(w.passthroughEsc) {
-		w.ptm.Write([]byte{'\r'})
+		w.ptm.Write([]byte{'\n'})
 	} else {
 		w.ptm.Write(w.passthroughEsc)
 	}
@@ -468,7 +468,10 @@ func isEscSequenceComplete(seq []byte) bool {
 		return false
 	}
 	switch seq[1] {
-	case '[': // CSI
+	case '[': // CSI – need ESC, '[', and at least one final byte
+		if len(seq) < 3 {
+			return false
+		}
 		final := seq[len(seq)-1]
 		return final >= 0x40 && final <= 0x7E
 	case 'O': // SS3
