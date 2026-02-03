@@ -13,7 +13,7 @@ import (
 
 func newLsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "ls",
+		Use:   "list",
 		Short: "List running agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			names, err := daemon.ListAgents()
