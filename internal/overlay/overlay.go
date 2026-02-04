@@ -12,6 +12,7 @@ import (
 	"github.com/vito/midterm"
 	"golang.org/x/term"
 
+	"h2/internal/message"
 	"h2/internal/virtualterminal"
 )
 
@@ -43,8 +44,9 @@ type Overlay struct {
 	PendingEsc     bool
 	EscTimer       *time.Timer
 	PassthroughEsc []byte
-	ScrollOffset int
-	DebugKeys    bool
+	ScrollOffset  int
+	InputPriority message.Priority
+	DebugKeys     bool
 	DebugKeyBuf  []string
 	AgentName    string
 	OnModeChange func(mode InputMode)
@@ -88,6 +90,7 @@ func (o *Overlay) Run(command string, args ...string) error {
 	o.VT.LastOut = time.Now()
 	o.Mode = ModeDefault
 	o.ScrollOffset = 0
+	o.InputPriority = message.PriorityNormal
 
 	if o.VT.Output == nil {
 		o.VT.Output = os.Stdout
@@ -247,6 +250,7 @@ func (o *Overlay) RunDaemon(command string, args ...string) error {
 	o.VT.LastOut = time.Now()
 	o.Mode = ModeDefault
 	o.ScrollOffset = 0
+	o.InputPriority = message.PriorityNormal
 
 	if o.VT.Output == nil {
 		o.VT.Output = io.Discard

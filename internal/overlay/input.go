@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"h2/internal/message"
 	"h2/internal/virtualterminal"
 )
 
@@ -243,9 +244,8 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 
 		switch b {
 		case 0x09:
-			if !o.writePTYOrHang([]byte{'\t'}) {
-				return n
-			}
+			o.CyclePriority()
+			o.RenderBar()
 
 		case 0x0D, 0x0A:
 			if len(o.Input) > 0 {
@@ -418,6 +418,25 @@ func (o *Overlay) CancelPendingSlash() {
 	if o.SlashTimer != nil {
 		o.SlashTimer.Stop()
 	}
+}
+
+// priorityOrder defines the Tab cycling order for input priorities.
+var priorityOrder = []message.Priority{
+	message.PriorityNormal,
+	message.PriorityInterrupt,
+	message.PriorityIdleFirst,
+	message.PriorityIdle,
+}
+
+// CyclePriority advances InputPriority to the next value in the cycle.
+func (o *Overlay) CyclePriority() {
+	for i, p := range priorityOrder {
+		if p == o.InputPriority {
+			o.InputPriority = priorityOrder[(i+1)%len(priorityOrder)]
+			return
+		}
+	}
+	o.InputPriority = message.PriorityNormal
 }
 
 // HandleScrollBytes processes input when in scroll mode.

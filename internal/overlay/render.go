@@ -185,7 +185,7 @@ func (o *Overlay) RenderBar() {
 	buf.WriteString("\033[0m")
 
 	// --- Input line ---
-	prompt := "> "
+	prompt := o.InputPriority.String() + " > "
 	inputStr := string(o.Input)
 	maxInput := o.VT.Cols - len(prompt)
 
