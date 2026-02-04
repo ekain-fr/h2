@@ -128,7 +128,11 @@ func (o *Overlay) RenderBar() {
 	var style, label string
 	if o.ChildExited {
 		style = "\033[7m\033[31m" // red inverse
-		label = " " + o.exitMessage() + " | [Enter] relaunch \u00b7 [q] quit"
+		if o.Mode == ModeScroll {
+			label = " Scroll | " + o.exitMessage() + " | Esc exit scroll"
+		} else {
+			label = " " + o.exitMessage() + " | [Enter] relaunch \u00b7 [q] quit"
+		}
 	} else {
 		style = o.ModeBarStyle()
 		help := o.HelpLabel()

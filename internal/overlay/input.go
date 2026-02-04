@@ -34,10 +34,12 @@ func (o *Overlay) writePTYOrHang(p []byte) bool {
 }
 
 // HandleExitedBytes processes input when the child has exited or is hung.
-// Enter relaunches, q quits.
-func (o *Overlay) HandleExitedBytes(buf []byte, i, n int) int {
-	for ; i < n; i++ {
-		switch buf[i] {
+// Enter relaunches, q quits. ESC sequences are processed for mouse scroll.
+func (o *Overlay) HandleExitedBytes(buf []byte, start, n int) int {
+	for i := start; i < n; {
+		b := buf[i]
+		i++
+		switch b {
 		case '\r', '\n':
 			select {
 			case o.relaunchCh <- struct{}{}:
@@ -51,6 +53,12 @@ func (o *Overlay) HandleExitedBytes(buf []byte, i, n int) int {
 			}
 			o.Quit = true
 			return n
+		case 0x1B:
+			consumed, handled := o.HandleEscape(buf[i:n])
+			i += consumed
+			if handled {
+				continue
+			}
 		}
 	}
 	return n
