@@ -11,6 +11,8 @@ func (o *Overlay) MenuSelect() {
 		o.VT.Output.Write([]byte("\033[2J\033[H"))
 		o.RenderScreen()
 	case 2:
+		o.EnterScrollMode()
+	case 3:
 		o.Quit = true
 		o.VT.Cmd.Process.Signal(syscall.SIGTERM)
 	}

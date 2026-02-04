@@ -19,22 +19,61 @@ import (
 func (o *Overlay) RenderScreen() {
 	var buf bytes.Buffer
 	buf.WriteString("\033[?25l")
-	for row := 0; row < o.VT.ChildRows; row++ {
-		fmt.Fprintf(&buf, "\033[%d;1H\033[2K", row+1)
-		o.RenderLine(&buf, row)
+	if o.Mode == ModeScroll {
+		o.renderScrollView(&buf)
+	} else {
+		o.renderLiveView(&buf)
 	}
 	o.VT.Output.Write(buf.Bytes())
 }
 
-// RenderLine writes one row of the virtual terminal to buf.
-func (o *Overlay) RenderLine(buf *bytes.Buffer, row int) {
-	if row >= len(o.VT.Vt.Content) {
+// renderLiveView renders the live terminal, anchored to the bottom of Content
+// so that the most recent output is always visible.
+func (o *Overlay) renderLiveView(buf *bytes.Buffer) {
+	startRow := len(o.VT.Vt.Content) - o.VT.ChildRows
+	if startRow < 0 {
+		startRow = 0
+	}
+	for i := 0; i < o.VT.ChildRows; i++ {
+		fmt.Fprintf(buf, "\033[%d;1H\033[2K", i+1)
+		o.RenderLineFrom(buf, o.VT.Vt, startRow+i)
+	}
+}
+
+// renderScrollView renders the scrollback buffer at the current ScrollOffset.
+func (o *Overlay) renderScrollView(buf *bytes.Buffer) {
+	sb := o.VT.Scrollback
+	if sb == nil {
+		o.renderLiveView(buf)
 		return
 	}
-	line := o.VT.Vt.Content[row]
+	bottom := sb.Cursor.Y
+	startRow := bottom - o.VT.ChildRows + 1 - o.ScrollOffset
+	if startRow < 0 {
+		startRow = 0
+	}
+	for i := 0; i < o.VT.ChildRows; i++ {
+		fmt.Fprintf(buf, "\033[%d;1H\033[2K", i+1)
+		o.RenderLineFrom(buf, sb, startRow+i)
+	}
+	// Draw "(scrolling)" indicator at row 1, right-aligned, in inverse video.
+	indicator := "(scrolling)"
+	col := o.VT.Cols - len(indicator) + 1
+	if col < 1 {
+		col = 1
+	}
+	fmt.Fprintf(buf, "\033[1;%dH\033[7m%s\033[0m", col, indicator)
+}
+
+// RenderLineFrom writes one row of the given terminal to buf.
+func (o *Overlay) RenderLineFrom(buf *bytes.Buffer, vt *midterm.Terminal, row int) {
+	if row >= len(vt.Content) {
+		return
+	}
+	line := vt.Content[row]
 	var pos int
 	var lastFormat midterm.Format
-	for region := range o.VT.Vt.Format.Regions(row) {
+	for region := range vt.Format.Regions(row) {
 		f := region.F
 		if f != lastFormat {
 			buf.WriteString("\033[0m")
@@ -62,6 +101,11 @@ func (o *Overlay) RenderLine(buf *bytes.Buffer, row int) {
 		pos = end
 	}
 	buf.WriteString("\033[0m")
+}
+
+// RenderLine writes one row of the primary virtual terminal to buf.
+func (o *Overlay) RenderLine(buf *bytes.Buffer, row int) {
+	o.RenderLineFrom(buf, o.VT.Vt, row)
 }
 
 // RenderBar draws the separator line and input bar.
@@ -179,6 +223,8 @@ func (o *Overlay) ModeLabel() string {
 		return "Passthrough"
 	case ModeMenu:
 		return o.MenuLabel()
+	case ModeScroll:
+		return "Scroll"
 	default:
 		return "Default"
 	}
@@ -191,6 +237,8 @@ func (o *Overlay) ModeBarStyle() string {
 		return "\033[7m\033[33m"
 	case ModeMenu:
 		return "\033[7m\033[34m"
+	case ModeScroll:
+		return "\033[7m\033[36m"
 	default:
 		return "\033[7m\033[36m"
 	}
@@ -203,6 +251,8 @@ func (o *Overlay) HelpLabel() string {
 		return "Enter/Esc exit"
 	case ModeMenu:
 		return "Left/Right move | Enter select | Esc exit"
+	case ModeScroll:
+		return "Scroll/Up/Down navigate | Esc exit"
 	default:
 		return "Up/Down history | Enter send | / passthrough | // menu"
 	}

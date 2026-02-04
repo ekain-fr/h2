@@ -1,6 +1,8 @@
 package overlay
 
 import (
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -8,6 +10,7 @@ import (
 )
 
 const ptyWriteTimeout = 3 * time.Second
+const scrollStep = 3
 
 func (o *Overlay) setMode(mode InputMode) {
 	o.Mode = mode
@@ -333,6 +336,14 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			o.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
 			break
 		}
+		if o.Mode == ModeScroll {
+			if final == 'A' {
+				o.ScrollUp(1)
+			} else {
+				o.ScrollDown(1)
+			}
+			break
+		}
 		if o.Mode == ModeMenu {
 			if final == 'A' {
 				o.MenuPrev()
@@ -361,6 +372,8 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			}
 			o.RenderBar()
 		}
+	case 'M', 'm':
+		o.HandleSGRMouse(remaining[:i])
 	}
 
 	return totalConsumed, true
@@ -390,5 +403,120 @@ func (o *Overlay) CancelPendingSlash() {
 	o.PendingSlash = false
 	if o.SlashTimer != nil {
 		o.SlashTimer.Stop()
+	}
+}
+
+// HandleScrollBytes processes input when in scroll mode.
+// Esc or q exits scroll mode. Arrow keys scroll. All other input is ignored.
+func (o *Overlay) HandleScrollBytes(buf []byte, start, n int) int {
+	for i := start; i < n; {
+		b := buf[i]
+		i++
+		switch b {
+		case 0x1B:
+			consumed, handled := o.HandleEscape(buf[i:n])
+			i += consumed
+			if handled {
+				continue
+			}
+			// Bare Esc exits scroll mode.
+			o.ExitScrollMode()
+		case 'q', 'Q':
+			o.ExitScrollMode()
+		default:
+			// Ignore all other input in scroll mode.
+		}
+	}
+	return n
+}
+
+// EnterScrollMode switches to scroll mode, freezing the display.
+func (o *Overlay) EnterScrollMode() {
+	o.setMode(ModeScroll)
+	o.ScrollOffset = 0
+	o.RenderScreen()
+	o.RenderBar()
+}
+
+// ExitScrollMode returns to default mode and re-renders the live view.
+func (o *Overlay) ExitScrollMode() {
+	o.ScrollOffset = 0
+	o.setMode(ModeDefault)
+	o.RenderScreen()
+	o.RenderBar()
+}
+
+// ScrollUp moves the scroll view up by the given number of lines.
+func (o *Overlay) ScrollUp(lines int) {
+	o.ScrollOffset += lines
+	o.ClampScrollOffset()
+	o.RenderScreen()
+	o.RenderBar()
+}
+
+// ScrollDown moves the scroll view down by the given number of lines.
+// If we reach the bottom (offset 0), exits scroll mode.
+func (o *Overlay) ScrollDown(lines int) {
+	o.ScrollOffset -= lines
+	if o.ScrollOffset <= 0 {
+		o.ExitScrollMode()
+		return
+	}
+	o.ClampScrollOffset()
+	o.RenderScreen()
+	o.RenderBar()
+}
+
+// ClampScrollOffset ensures ScrollOffset is within valid bounds.
+func (o *Overlay) ClampScrollOffset() {
+	if o.VT.Scrollback == nil {
+		o.ScrollOffset = 0
+		return
+	}
+	maxOffset := o.VT.Scrollback.Cursor.Y - o.VT.ChildRows + 1
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if o.ScrollOffset > maxOffset {
+		o.ScrollOffset = maxOffset
+	}
+	if o.ScrollOffset < 0 {
+		o.ScrollOffset = 0
+	}
+}
+
+// HandleSGRMouse processes an SGR mouse event. The params bytes contain
+// the "<Cb;Cx;Cy" portion (everything between ESC[ and the final M/m).
+// Button 64 = scroll up, button 65 = scroll down.
+func (o *Overlay) HandleSGRMouse(params []byte) {
+	// SGR mouse format: ESC [ < Cb ; Cx ; Cy M/m
+	// params should start with '<' followed by Cb;Cx;Cy
+	s := string(params)
+	if !strings.HasPrefix(s, "<") {
+		return
+	}
+	s = s[1:] // strip leading '<'
+	parts := strings.Split(s, ";")
+	if len(parts) < 3 {
+		return
+	}
+	button, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return
+	}
+
+	switch button {
+	case 64: // scroll up
+		if o.Mode == ModePassthrough {
+			return
+		}
+		if o.Mode != ModeScroll {
+			o.EnterScrollMode()
+		}
+		o.ScrollUp(scrollStep)
+	case 65: // scroll down
+		if o.Mode == ModeScroll {
+			o.ScrollDown(scrollStep)
+		}
 	}
 }

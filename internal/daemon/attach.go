@@ -55,8 +55,9 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 		vt.Resize(req.Rows, req.Cols, childRows)
 	}
 
-	// Send full screen redraw.
+	// Send full screen redraw and enable mouse reporting.
 	vt.Output.Write([]byte("\033[2J\033[H"))
+	vt.Output.Write([]byte("\033[?1000h\033[?1006h"))
 	ov.RenderScreen()
 	ov.RenderBar()
 	vt.Mu.Unlock()
@@ -64,8 +65,9 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	// Read input frames from client until disconnect.
 	d.readClientInput(conn)
 
-	// Client disconnected — detach.
+	// Client disconnected — detach. Disable mouse before swapping output.
 	vt.Mu.Lock()
+	vt.Output.Write([]byte("\033[?1000l\033[?1006l"))
 	vt.Output = io.Discard
 	vt.InputSrc = &blockingReader{}
 	vt.Mu.Unlock()
@@ -97,6 +99,8 @@ func (d *Daemon) readClientInput(conn net.Conn) {
 					i = ov.HandlePassthroughBytes(payload, i, len(payload))
 				case overlay.ModeMenu:
 					i = ov.HandleMenuBytes(payload, i, len(payload))
+				case overlay.ModeScroll:
+					i = ov.HandleScrollBytes(payload, i, len(payload))
 				default:
 					i = ov.HandleDefaultBytes(payload, i, len(payload))
 				}
@@ -114,6 +118,9 @@ func (d *Daemon) readClientInput(conn net.Conn) {
 				vt.Mu.Lock()
 				childRows := ctrl.Rows - ov.ReservedRows()
 				vt.Resize(ctrl.Rows, ctrl.Cols, childRows)
+				if ov.Mode == overlay.ModeScroll {
+					ov.ClampScrollOffset()
+				}
 				vt.Output.Write([]byte("\033[2J"))
 				ov.RenderScreen()
 				ov.RenderBar()

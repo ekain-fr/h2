@@ -22,10 +22,11 @@ const (
 	ModeDefault InputMode = iota
 	ModePassthrough
 	ModeMenu
+	ModeScroll
 )
 
 // MenuItems are the built-in menu entries.
-var MenuItems = []string{"Clear input", "Redraw", "Quit"}
+var MenuItems = []string{"Clear input", "Redraw", "Scroll", "Quit"}
 
 // Overlay owns all UI state and holds a pointer to the underlying VT.
 type Overlay struct {
@@ -42,8 +43,9 @@ type Overlay struct {
 	PendingEsc     bool
 	EscTimer       *time.Timer
 	PassthroughEsc []byte
-	DebugKeys   bool
-	DebugKeyBuf []string
+	ScrollOffset int
+	DebugKeys    bool
+	DebugKeyBuf  []string
 	AgentName    string
 	OnModeChange func(mode InputMode)
 	QueueStatus  func() (int, bool)
@@ -80,8 +82,12 @@ func (o *Overlay) Run(command string, args ...string) error {
 	o.HistIdx = -1
 	o.VT.ChildRows = rows - o.ReservedRows()
 	o.VT.Vt = midterm.NewTerminal(o.VT.ChildRows, cols)
+	o.VT.Scrollback = midterm.NewTerminal(o.VT.ChildRows, cols)
+	o.VT.Scrollback.AutoResizeY = true
+	o.VT.Scrollback.AppendOnly = true
 	o.VT.LastOut = time.Now()
 	o.Mode = ModeDefault
+	o.ScrollOffset = 0
 
 	if o.VT.Output == nil {
 		o.VT.Output = os.Stdout
@@ -120,7 +126,10 @@ func (o *Overlay) Run(command string, args ...string) error {
 		o.VT.Ptm.Close()
 		return fmt.Errorf("set raw mode: %w", err)
 	}
+	// Enable SGR mouse reporting for scroll wheel support.
+	o.VT.Output.(io.Writer).Write([]byte("\033[?1000h\033[?1006h"))
 	defer func() {
+		o.VT.Output.(io.Writer).Write([]byte("\033[?1000l\033[?1006l"))
 		term.Restore(fd, o.VT.Restore)
 		o.VT.Output.(io.Writer).Write([]byte("\033[?25h\033[0m\r\n"))
 	}()
@@ -142,7 +151,12 @@ func (o *Overlay) Run(command string, args ...string) error {
 	o.VT.Mu.Unlock()
 
 	// Pipe child output.
-	go o.VT.PipeOutput(func() { o.RenderScreen(); o.RenderBar() })
+	go o.VT.PipeOutput(func() {
+			if o.Mode != ModeScroll {
+				o.RenderScreen()
+				o.RenderBar()
+			}
+		})
 
 	// Process user keyboard input.
 	go o.ReadInput()
@@ -181,18 +195,27 @@ func (o *Overlay) Run(command string, args ...string) error {
 			o.VT.Vt = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
 			o.VT.Vt.ForwardRequests = os.Stdout
 			o.VT.Vt.ForwardResponses = o.VT.Ptm
+			o.VT.Scrollback = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
+			o.VT.Scrollback.AutoResizeY = true
+			o.VT.Scrollback.AppendOnly = true
 
 			o.VT.Mu.Lock()
 			o.ChildExited = false
 			o.ChildHung = false
 			o.ExitError = nil
+			o.ScrollOffset = 0
 			o.VT.LastOut = time.Now()
 			o.VT.Output.Write([]byte("\033[2J\033[H"))
 			o.RenderScreen()
 			o.RenderBar()
 			o.VT.Mu.Unlock()
 
-			go o.VT.PipeOutput(func() { o.RenderScreen(); o.RenderBar() })
+			go o.VT.PipeOutput(func() {
+			if o.Mode != ModeScroll {
+				o.RenderScreen()
+				o.RenderBar()
+			}
+		})
 
 			if o.OnChildRelaunch != nil {
 				o.OnChildRelaunch()
@@ -218,8 +241,12 @@ func (o *Overlay) RunDaemon(command string, args ...string) error {
 	o.DebugKeys = virtualterminal.IsTruthyEnv("H2_DEBUG_KEYS")
 	o.VT.ChildRows = o.VT.Rows - o.ReservedRows()
 	o.VT.Vt = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
+	o.VT.Scrollback = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
+	o.VT.Scrollback.AutoResizeY = true
+	o.VT.Scrollback.AppendOnly = true
 	o.VT.LastOut = time.Now()
 	o.Mode = ModeDefault
+	o.ScrollOffset = 0
 
 	if o.VT.Output == nil {
 		o.VT.Output = io.Discard
@@ -238,7 +265,12 @@ func (o *Overlay) RunDaemon(command string, args ...string) error {
 	go o.TickStatus(stopStatus)
 
 	// Pipe child output to virtual terminal.
-	go o.VT.PipeOutput(func() { o.RenderScreen(); o.RenderBar() })
+	go o.VT.PipeOutput(func() {
+			if o.Mode != ModeScroll {
+				o.RenderScreen()
+				o.RenderBar()
+			}
+		})
 
 	o.relaunchCh = make(chan struct{}, 1)
 	o.quitCh = make(chan struct{}, 1)
@@ -272,18 +304,27 @@ func (o *Overlay) RunDaemon(command string, args ...string) error {
 			}
 			o.VT.Vt = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
 			o.VT.Vt.ForwardResponses = o.VT.Ptm
+			o.VT.Scrollback = midterm.NewTerminal(o.VT.ChildRows, o.VT.Cols)
+			o.VT.Scrollback.AutoResizeY = true
+			o.VT.Scrollback.AppendOnly = true
 
 			o.VT.Mu.Lock()
 			o.ChildExited = false
 			o.ChildHung = false
 			o.ExitError = nil
+			o.ScrollOffset = 0
 			o.VT.LastOut = time.Now()
 			o.VT.Output.Write([]byte("\033[2J\033[H"))
 			o.RenderScreen()
 			o.RenderBar()
 			o.VT.Mu.Unlock()
 
-			go o.VT.PipeOutput(func() { o.RenderScreen(); o.RenderBar() })
+			go o.VT.PipeOutput(func() {
+			if o.Mode != ModeScroll {
+				o.RenderScreen()
+				o.RenderBar()
+			}
+		})
 
 			if o.OnChildRelaunch != nil {
 				o.OnChildRelaunch()
@@ -318,6 +359,8 @@ func (o *Overlay) ReadInput() {
 				i = o.HandlePassthroughBytes(buf, i, n)
 			case ModeMenu:
 				i = o.HandleMenuBytes(buf, i, n)
+			case ModeScroll:
+				i = o.HandleScrollBytes(buf, i, n)
 			default:
 				i = o.HandleDefaultBytes(buf, i, n)
 			}
@@ -357,6 +400,9 @@ func (o *Overlay) WatchResize(sigCh <-chan os.Signal) {
 
 		o.VT.Mu.Lock()
 		o.VT.Resize(rows, cols, rows-o.ReservedRows())
+		if o.Mode == ModeScroll {
+			o.ClampScrollOffset()
+		}
 		o.VT.Output.Write([]byte("\033[2J"))
 		o.RenderScreen()
 		o.RenderBar()

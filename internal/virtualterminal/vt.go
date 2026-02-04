@@ -16,19 +16,20 @@ import (
 
 // VT owns the PTY lifecycle, child process, virtual terminal buffer, and I/O streams.
 type VT struct {
-	Ptm       *os.File         // PTY master (connected to child process)
-	Cmd       *exec.Cmd        // child process
-	Mu        sync.Mutex       // guards all terminal writes (overlay accesses via o.VT.Mu)
-	Vt        *midterm.Terminal // virtual terminal for child output
-	Rows      int              // terminal rows
-	Cols      int              // terminal cols
-	ChildRows int              // number of rows reserved for the child PTY
-	Output    io.Writer        // stdout or frame writer (swapped on attach)
-	InputSrc  io.Reader        // stdin or frame reader (swapped on attach)
-	OscFg     string           // cached OSC 10 response (foreground color)
-	OscBg     string           // cached OSC 11 response (background color)
-	LastOut   time.Time        // last time child output updated the screen
-	Restore   *term.State      // original terminal state for cleanup
+	Ptm        *os.File         // PTY master (connected to child process)
+	Cmd        *exec.Cmd        // child process
+	Mu         sync.Mutex       // guards all terminal writes (overlay accesses via o.VT.Mu)
+	Vt         *midterm.Terminal // virtual terminal for child output
+	Scrollback *midterm.Terminal // append-only terminal for scroll history (never loses lines)
+	Rows       int              // terminal rows
+	Cols       int              // terminal cols
+	ChildRows  int              // number of rows reserved for the child PTY
+	Output     io.Writer        // stdout or frame writer (swapped on attach)
+	InputSrc   io.Reader        // stdin or frame reader (swapped on attach)
+	OscFg      string           // cached OSC 10 response (foreground color)
+	OscBg      string           // cached OSC 11 response (background color)
+	LastOut    time.Time        // last time child output updated the screen
+	Restore    *term.State      // original terminal state for cleanup
 }
 
 // StartPTY creates and starts the child process in a PTY with the given size.
@@ -57,6 +58,9 @@ func (vt *VT) PipeOutput(onData func()) {
 			vt.Mu.Lock()
 			vt.LastOut = time.Now()
 			vt.Vt.Write(buf[:n])
+			if vt.Scrollback != nil {
+				vt.Scrollback.Write(buf[:n])
+			}
 			onData()
 			vt.Mu.Unlock()
 		}
@@ -82,6 +86,9 @@ func (vt *VT) Resize(totalRows, cols, childRows int) {
 	vt.Cols = cols
 	vt.ChildRows = childRows
 	vt.Vt.Resize(childRows, cols)
+	if vt.Scrollback != nil {
+		vt.Scrollback.ResizeX(cols)
+	}
 	pty.Setsize(vt.Ptm, &pty.Winsize{
 		Rows: uint16(childRows),
 		Cols: uint16(cols),
