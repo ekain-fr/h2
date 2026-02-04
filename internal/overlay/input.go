@@ -483,9 +483,14 @@ func (o *Overlay) ExitScrollMode() {
 }
 
 // ScrollUp moves the scroll view up by the given number of lines.
+// If the offset is already at the maximum, this is a no-op to avoid re-rendering.
 func (o *Overlay) ScrollUp(lines int) {
+	prev := o.ScrollOffset
 	o.ScrollOffset += lines
 	o.ClampScrollOffset()
+	if o.ScrollOffset == prev {
+		return
+	}
 	o.RenderScreen()
 	o.RenderBar()
 }

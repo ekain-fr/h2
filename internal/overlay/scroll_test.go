@@ -137,6 +137,24 @@ func TestScrollUpDown(t *testing.T) {
 	}
 }
 
+func TestScrollUp_NoOpAtMax(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	for i := 0; i < 15; i++ {
+		o.VT.Scrollback.Write([]byte("line\n"))
+	}
+	o.EnterScrollMode()
+
+	// Scroll up to the max.
+	o.ScrollUp(999)
+	maxOffset := o.ScrollOffset
+
+	// Scrolling up again should be a no-op (offset stays the same).
+	o.ScrollUp(5)
+	if o.ScrollOffset != maxOffset {
+		t.Fatalf("expected offset to stay at %d, got %d", maxOffset, o.ScrollOffset)
+	}
+}
+
 func TestScrollDown_ExitsAtZero(t *testing.T) {
 	o := newTestOverlay(10, 80)
 	for i := 0; i < 30; i++ {
