@@ -331,23 +331,49 @@ func TestHandleScrollBytes_ArrowDownScrolls(t *testing.T) {
 	}
 }
 
-// --- RenderLiveView renders from row 0 ---
+// --- RenderLiveView anchors to cursor ---
 
-func TestRenderLiveView_RendersVisibleRows(t *testing.T) {
+func TestRenderLiveView_AnchorsToCursor(t *testing.T) {
 	o := newTestOverlay(5, 40)
-	// Write more lines than ChildRows. The primary terminal scrolls
-	// internally, keeping visible content in rows 0 through ChildRows-1.
+	// Write enough lines to move the cursor well past ChildRows.
 	for i := 0; i < 20; i++ {
 		o.VT.Vt.Write([]byte("line\n"))
+	}
+
+	cursorY := o.VT.Vt.Cursor.Y
+	expectedStart := cursorY - o.VT.ChildRows + 1
+	if expectedStart < 0 {
+		expectedStart = 0
 	}
 
 	var buf bytes.Buffer
 	o.renderLiveView(&buf)
 	output := buf.String()
 
-	// The live view should contain rendered content from the visible area.
 	if len(output) == 0 {
 		t.Fatal("expected non-empty render output")
+	}
+	// The cursor should be within the rendered window.
+	if cursorY < expectedStart || cursorY >= expectedStart+o.VT.ChildRows {
+		t.Fatalf("cursor Y=%d outside rendered window [%d, %d)", cursorY, expectedStart, expectedStart+o.VT.ChildRows)
+	}
+}
+
+func TestRenderLiveView_SmallContent(t *testing.T) {
+	o := newTestOverlay(10, 40)
+	// Write fewer lines than ChildRows — startRow should be 0.
+	o.VT.Vt.Write([]byte("hello\n"))
+
+	var buf bytes.Buffer
+	o.renderLiveView(&buf)
+	output := buf.String()
+
+	if len(output) == 0 {
+		t.Fatal("expected non-empty render output")
+	}
+	// Cursor should be at row 1 (after one newline), startRow = max(0, 1-10+1) = 0.
+	if o.VT.Vt.Cursor.Y > o.VT.ChildRows {
+		t.Fatalf("cursor Y=%d should be within ChildRows=%d", o.VT.Vt.Cursor.Y, o.VT.ChildRows)
 	}
 }
 
