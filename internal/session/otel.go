@@ -124,6 +124,11 @@ func (s *Session) handleOtelLogs(w http.ResponseWriter, r *http.Request) {
 				if eventName != "" {
 					s.NoteOtelEvent()
 
+					// Mark that we received an event (for connection status)
+					if s.otelMetrics != nil {
+						s.otelMetrics.NoteEvent()
+					}
+
 					// Parse metrics if we have an agent helper with a parser
 					if s.agentHelper != nil && s.otelMetrics != nil {
 						if parser := s.agentHelper.OtelParser(); parser != nil {

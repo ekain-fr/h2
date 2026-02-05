@@ -21,12 +21,16 @@ type OtelMetrics struct {
 	// Event counts (for debugging/verification)
 	APIRequestCount int64
 	ToolResultCount int64
+
+	// Connection status
+	EventsReceived bool // true after first OTEL event
 }
 
 // Update adds values to the aggregated metrics.
 func (m *OtelMetrics) Update(delta OtelMetricsDelta) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.EventsReceived = true
 	m.InputTokens += delta.InputTokens
 	m.OutputTokens += delta.OutputTokens
 	m.TotalTokens += delta.TotalTokens
@@ -37,6 +41,13 @@ func (m *OtelMetrics) Update(delta OtelMetricsDelta) {
 	if delta.IsToolResult {
 		m.ToolResultCount++
 	}
+}
+
+// NoteEvent marks that an OTEL event was received (even if no metrics extracted).
+func (m *OtelMetrics) NoteEvent() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.EventsReceived = true
 }
 
 // Snapshot returns a copy of the current metrics.
@@ -50,6 +61,7 @@ func (m *OtelMetrics) Snapshot() OtelMetricsSnapshot {
 		TotalCostUSD:    m.TotalCostUSD,
 		APIRequestCount: m.APIRequestCount,
 		ToolResultCount: m.ToolResultCount,
+		EventsReceived:  m.EventsReceived,
 	}
 }
 
@@ -61,6 +73,7 @@ type OtelMetricsSnapshot struct {
 	TotalCostUSD    float64
 	APIRequestCount int64
 	ToolResultCount int64
+	EventsReceived  bool
 }
 
 // FormatTokens returns a human-readable token count (e.g., "6k", "1.2M").

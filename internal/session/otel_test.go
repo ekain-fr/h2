@@ -196,6 +196,12 @@ func TestOtelMetrics_AccumulatesTokensAndCost(t *testing.T) {
 	// Give server time to start.
 	time.Sleep(50 * time.Millisecond)
 
+	// Before any events, EventsReceived should be false.
+	m := s.Metrics()
+	if m.EventsReceived {
+		t.Error("expected EventsReceived=false before any events")
+	}
+
 	// Send an api_request with tokens and cost.
 	payload := `{
 		"resourceLogs": [{
@@ -220,7 +226,10 @@ func TestOtelMetrics_AccumulatesTokensAndCost(t *testing.T) {
 	resp.Body.Close()
 
 	// Check metrics.
-	m := s.Metrics()
+	m = s.Metrics()
+	if !m.EventsReceived {
+		t.Error("expected EventsReceived=true after event")
+	}
 	if m.InputTokens != 1000 {
 		t.Errorf("expected InputTokens=1000, got %d", m.InputTokens)
 	}

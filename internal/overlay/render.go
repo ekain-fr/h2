@@ -142,9 +142,11 @@ func (o *Overlay) RenderBar() {
 
 		// OTEL metrics (tokens and cost)
 		if o.OtelMetrics != nil {
-			tokens, cost := o.OtelMetrics()
-			if tokens > 0 || cost > 0 {
+			tokens, cost, connected := o.OtelMetrics()
+			if connected {
 				label += " | " + formatTokens(tokens) + " " + formatCost(cost)
+			} else {
+				label += " | [no otel]"
 			}
 		}
 
