@@ -50,8 +50,11 @@ func TestOtelEnv_ReturnsCorrectVars(t *testing.T) {
 		"CLAUDE_CODE_ENABLE_TELEMETRY",
 		"OTEL_METRICS_EXPORTER",
 		"OTEL_LOGS_EXPORTER",
+		"OTEL_TRACES_EXPORTER",
 		"OTEL_EXPORTER_OTLP_PROTOCOL",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_METRIC_EXPORT_INTERVAL",
+		"OTEL_LOGS_EXPORT_INTERVAL",
 	}
 	for _, key := range expected {
 		if _, ok := env[key]; !ok {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,14 +34,27 @@ type VT struct {
 }
 
 // StartPTY creates and starts the child process in a PTY with the given size.
-// If extraEnv is non-nil, those environment variables are added to the child's environment.
+// If extraEnv is non-nil, those environment variables are added to the child's environment,
+// overriding any existing values.
 func (vt *VT) StartPTY(command string, args []string, childRows, cols int, extraEnv map[string]string) error {
 	vt.Cmd = exec.Command(command, args...)
 	if len(extraEnv) > 0 {
-		vt.Cmd.Env = os.Environ()
-		for k, v := range extraEnv {
-			vt.Cmd.Env = append(vt.Cmd.Env, k+"="+v)
+		// Build new env, filtering out keys we're overriding
+		env := make([]string, 0, len(os.Environ())+len(extraEnv))
+		for _, e := range os.Environ() {
+			key := e
+			if idx := strings.Index(e, "="); idx >= 0 {
+				key = e[:idx]
+			}
+			if _, override := extraEnv[key]; !override {
+				env = append(env, e)
+			}
 		}
+		// Add our overrides
+		for k, v := range extraEnv {
+			env = append(env, k+"="+v)
+		}
+		vt.Cmd.Env = env
 	}
 	var err error
 	vt.Ptm, err = pty.StartWithSize(vt.Cmd, &pty.Winsize{

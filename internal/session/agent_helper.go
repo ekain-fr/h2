@@ -35,12 +35,17 @@ func (h *ClaudeCodeHelper) OtelEnv(otelPort int) map[string]string {
 	if otelPort == 0 {
 		return nil
 	}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", otelPort)
 	return map[string]string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY": "1",
 		"OTEL_METRICS_EXPORTER":        "otlp",
 		"OTEL_LOGS_EXPORTER":           "otlp",
+		"OTEL_TRACES_EXPORTER":         "none",
 		"OTEL_EXPORTER_OTLP_PROTOCOL":  "http/json",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":  fmt.Sprintf("http://127.0.0.1:%d", otelPort),
+		"OTEL_EXPORTER_OTLP_ENDPOINT":  endpoint,
+		// Export intervals
+		"OTEL_METRIC_EXPORT_INTERVAL": "5000",
+		"OTEL_LOGS_EXPORT_INTERVAL":   "1000",
 	}
 }
 

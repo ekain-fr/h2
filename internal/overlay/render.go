@@ -142,11 +142,11 @@ func (o *Overlay) RenderBar() {
 
 		// OTEL metrics (tokens and cost)
 		if o.OtelMetrics != nil {
-			tokens, cost, connected := o.OtelMetrics()
+			tokens, cost, connected, port := o.OtelMetrics()
 			if connected {
 				label += " | " + formatTokens(tokens) + " " + formatCost(cost)
 			} else {
-				label += " | [no otel]"
+				label += fmt.Sprintf(" | [otel:%d]", port)
 			}
 		}
 

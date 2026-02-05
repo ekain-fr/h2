@@ -54,9 +54,15 @@ func (p *ClaudeCodeParser) ParseLogRecord(record OtelLogRecord) *OtelMetricsDelt
 func getIntAttr(attrs []OtelAttribute, key string) int64 {
 	for _, a := range attrs {
 		if a.Key == key {
-			// OTEL can send ints as intValue or stringValue
-			if a.Value.IntValue != "" {
-				if v, err := strconv.ParseInt(a.Value.IntValue, 10, 64); err == nil {
+			// OTEL can send ints as intValue (number or string) or stringValue
+			if len(a.Value.IntValue) > 0 {
+				// Try parsing as raw JSON number or quoted string
+				s := string(a.Value.IntValue)
+				// Remove quotes if present
+				if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+					s = s[1 : len(s)-1]
+				}
+				if v, err := strconv.ParseInt(s, 10, 64); err == nil {
 					return v
 				}
 			}
