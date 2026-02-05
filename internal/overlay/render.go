@@ -140,6 +140,14 @@ func (o *Overlay) RenderBar() {
 		status := o.StatusLabel()
 		label = " " + o.ModeLabel() + " | " + status
 
+		// OTEL metrics (tokens and cost)
+		if o.OtelMetrics != nil {
+			tokens, cost := o.OtelMetrics()
+			if tokens > 0 || cost > 0 {
+				label += " | " + formatTokens(tokens) + " " + formatCost(cost)
+			}
+		}
+
 		// Queue indicator
 		if o.QueueStatus != nil {
 			count, paused := o.QueueStatus()
@@ -322,6 +330,31 @@ func (o *Overlay) AppendDebugBytes(data []byte) {
 			o.DebugKeyBuf = o.DebugKeyBuf[len(o.DebugKeyBuf)-10:]
 		}
 	}
+}
+
+// formatTokens returns a human-readable token count (e.g., "6k", "1.2M").
+func formatTokens(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 10000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	if n < 1000000 {
+		return fmt.Sprintf("%dk", n/1000)
+	}
+	if n < 10000000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	}
+	return fmt.Sprintf("%dM", n/1000000)
+}
+
+// formatCost returns a human-readable cost (e.g., "$0.12", "$1.23").
+func formatCost(usd float64) string {
+	if usd < 0.01 {
+		return fmt.Sprintf("$%.3f", usd)
+	}
+	return fmt.Sprintf("$%.2f", usd)
 }
 
 // exitMessage returns a human-readable description of why the child exited.

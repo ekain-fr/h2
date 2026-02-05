@@ -51,8 +51,9 @@ type Overlay struct {
 	AgentName    string
 	OnModeChange func(mode InputMode)
 	QueueStatus  func() (int, bool)
-	OnSubmit     func(text string, priority message.Priority) // called for non-normal input
-	OnOutput     func()                                        // called after each child output
+	OtelMetrics  func() (totalTokens int64, totalCostUSD float64) // returns OTEL metrics for status bar
+	OnSubmit     func(text string, priority message.Priority)     // called for non-normal input
+	OnOutput     func()                                           // called after each child output
 
 	// Child process lifecycle.
 	ChildExited     bool

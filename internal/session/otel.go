@@ -85,18 +85,12 @@ func (s *Session) OtelPort() int {
 }
 
 // OtelEnv returns environment variables to inject into the child process
-// for OTEL telemetry export.
+// for OTEL telemetry export. Delegates to the agent helper.
 func (s *Session) OtelEnv() map[string]string {
-	if s.otelPort == 0 {
+	if s.agentHelper == nil {
 		return nil
 	}
-	return map[string]string{
-		"CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-		"OTEL_METRICS_EXPORTER":        "otlp",
-		"OTEL_LOGS_EXPORTER":           "otlp",
-		"OTEL_EXPORTER_OTLP_PROTOCOL":  "http/json",
-		"OTEL_EXPORTER_OTLP_ENDPOINT":  fmt.Sprintf("http://127.0.0.1:%d", s.otelPort),
-	}
+	return s.agentHelper.OtelEnv(s.otelPort)
 }
 
 // handleOtelLogs handles POST /v1/logs from OTLP exporters.
@@ -122,14 +116,22 @@ func (s *Session) handleOtelLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract event names and signal activity
+	// Extract event names, parse metrics, and signal activity
 	for _, rl := range payload.ResourceLogs {
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
 				eventName := getAttr(lr.Attributes, "event.name")
 				if eventName != "" {
 					s.NoteOtelEvent()
-					// Could store event details for debugging/metrics
+
+					// Parse metrics if we have an agent helper with a parser
+					if s.agentHelper != nil && s.otelMetrics != nil {
+						if parser := s.agentHelper.OtelParser(); parser != nil {
+							if delta := parser.ParseLogRecord(lr); delta != nil {
+								s.otelMetrics.Update(*delta)
+							}
+						}
+					}
 				}
 			}
 		}

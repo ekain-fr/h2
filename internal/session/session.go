@@ -60,6 +60,8 @@ type Session struct {
 	otelListener net.Listener
 	otelServer   *http.Server
 	otelPort     int
+	agentHelper  AgentHelper
+	otelMetrics  *OtelMetrics
 
 	stopCh chan struct{}
 
@@ -68,6 +70,7 @@ type Session struct {
 }
 
 // New creates a new Session with the given name and PTY writer.
+// Uses Claude Code helper by default — call SetAgentHelper to change.
 func New(name string, ptyWriter io.Writer) *Session {
 	return &Session{
 		Name:           name,
@@ -81,7 +84,14 @@ func New(name string, ptyWriter io.Writer) *Session {
 		otelNotify:     make(chan struct{}, 1),
 		exitNotify:     make(chan struct{}, 1),
 		stopCh:         make(chan struct{}),
+		agentHelper:    NewClaudeCodeHelper(),
+		otelMetrics:    &OtelMetrics{},
 	}
+}
+
+// SetAgentHelper sets the agent-specific helper for this session.
+func (s *Session) SetAgentHelper(helper AgentHelper) {
+	s.agentHelper = helper
 }
 
 // State returns the current session state.
@@ -138,6 +148,14 @@ func (s *Session) StateDuration() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return time.Since(s.stateChangedAt)
+}
+
+// Metrics returns a snapshot of the current OTEL metrics.
+func (s *Session) Metrics() OtelMetricsSnapshot {
+	if s.otelMetrics == nil {
+		return OtelMetricsSnapshot{}
+	}
+	return s.otelMetrics.Snapshot()
 }
 
 // NoteOutput signals that the child process has produced output.

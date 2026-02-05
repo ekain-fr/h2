@@ -107,6 +107,10 @@ func (d *Daemon) Run() error {
 	d.Overlay.QueueStatus = func() (int, bool) {
 		return d.Session.Queue.PendingCount(), d.Session.Queue.IsPaused()
 	}
+	d.Overlay.OtelMetrics = func() (int64, float64) {
+		m := d.Session.Metrics()
+		return m.TotalTokens, m.TotalCostUSD
+	}
 	d.Overlay.OnSubmit = func(text string, pri message.Priority) {
 		d.Session.SubmitInput(text, pri)
 	}
