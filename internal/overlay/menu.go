@@ -7,6 +7,7 @@ func (o *Overlay) MenuSelect() {
 	switch o.MenuIdx {
 	case 0:
 		o.Input = o.Input[:0]
+		o.CursorPos = 0
 	case 1:
 		o.VT.Output.Write([]byte("\033[2J\033[H"))
 		o.RenderScreen()

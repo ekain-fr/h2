@@ -197,16 +197,33 @@ func (o *Overlay) RenderBar() {
 
 	// --- Input line ---
 	prompt := o.InputPriority.String() + " > "
-	inputStr := string(o.Input)
 	maxInput := o.VT.Cols - len(prompt)
 
-	displayInput := inputStr
-	runeCount := utf8.RuneCountInString(displayInput)
-	if runeCount > maxInput && maxInput > 0 {
-		runes := []rune(displayInput)
-		displayInput = string(runes[len(runes)-maxInput:])
-		runeCount = maxInput
+	inputRunes := []rune(string(o.Input))
+	totalRunes := len(inputRunes)
+	cursorRunePos := utf8.RuneCount(o.Input[:o.CursorPos])
+
+	// Determine the visible window of runes, keeping the cursor in view.
+	displayStart := 0
+	if totalRunes > maxInput && maxInput > 0 {
+		displayStart = cursorRunePos - maxInput + 1
+		if displayStart < 0 {
+			displayStart = 0
+		}
+		if displayStart+maxInput > totalRunes {
+			displayStart = totalRunes - maxInput
+			if displayStart < 0 {
+				displayStart = 0
+			}
+		}
 	}
+	displayEnd := displayStart + maxInput
+	if displayEnd > totalRunes {
+		displayEnd = totalRunes
+	}
+
+	displayInput := string(inputRunes[displayStart:displayEnd])
+
 	fmt.Fprintf(&buf, "\033[%d;1H\033[2K", inputRow)
 	promptColor := "\033[36m" // cyan
 	if o.InputPriority == message.PriorityInterrupt {
@@ -214,7 +231,7 @@ func (o *Overlay) RenderBar() {
 	}
 	fmt.Fprintf(&buf, "%s%s\033[0m%s", promptColor, prompt, displayInput)
 
-	cursorCol := len(prompt) + runeCount + 1
+	cursorCol := len(prompt) + (cursorRunePos - displayStart) + 1
 	if cursorCol > o.VT.Cols {
 		cursorCol = o.VT.Cols
 	}

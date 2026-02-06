@@ -33,6 +33,7 @@ var MenuItems = []string{"Clear input", "Redraw", "Scroll", "Quit"}
 type Overlay struct {
 	VT          *virtualterminal.VT
 	Input       []byte
+	CursorPos   int // byte offset within Input
 	History     []string
 	HistIdx     int
 	Saved       []byte

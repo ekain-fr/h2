@@ -15,6 +15,7 @@ func (o *Overlay) HistoryUp() {
 		return
 	}
 	o.Input = []byte(o.History[o.HistIdx])
+	o.CursorPos = len(o.Input)
 }
 
 // HistoryDown moves to the next history entry.
@@ -30,4 +31,5 @@ func (o *Overlay) HistoryDown() {
 		o.Input = o.Saved
 		o.Saved = nil
 	}
+	o.CursorPos = len(o.Input)
 }

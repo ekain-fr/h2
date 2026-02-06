@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"h2/internal/message"
 	"h2/internal/virtualterminal"
@@ -266,6 +265,7 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 				}
 				o.History = append(o.History, cmd)
 				o.Input = o.Input[:0]
+				o.CursorPos = 0
 				o.InputPriority = message.PriorityNormal
 			} else {
 				if !o.writePTYOrHang([]byte{'\r'}) {
@@ -277,10 +277,49 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 			o.RenderBar()
 
 		case 0x7F, 0x08:
-			if len(o.Input) > 0 {
-				_, size := utf8.DecodeLastRune(o.Input)
-				o.Input = o.Input[:len(o.Input)-size]
+			if o.CursorPos > 0 {
+				o.DeleteBackward()
 				o.RenderBar()
+			}
+
+		case 0x01: // ctrl+a — move to start (pass through if input empty)
+			if len(o.Input) > 0 {
+				o.CursorToStart()
+				o.RenderBar()
+			} else {
+				if !o.writePTYOrHang([]byte{b}) {
+					return n
+				}
+			}
+
+		case 0x05: // ctrl+e — move to end (pass through if input empty)
+			if len(o.Input) > 0 {
+				o.CursorToEnd()
+				o.RenderBar()
+			} else {
+				if !o.writePTYOrHang([]byte{b}) {
+					return n
+				}
+			}
+
+		case 0x0B: // ctrl+k — kill to end of line (pass through if input empty)
+			if len(o.Input) > 0 {
+				o.KillToEnd()
+				o.RenderBar()
+			} else {
+				if !o.writePTYOrHang([]byte{b}) {
+					return n
+				}
+			}
+
+		case 0x15: // ctrl+u — kill to start of line (pass through if input empty)
+			if len(o.Input) > 0 {
+				o.KillToStart()
+				o.RenderBar()
+			} else {
+				if !o.writePTYOrHang([]byte{b}) {
+					return n
+				}
 			}
 
 		default:
@@ -289,7 +328,7 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 					return n
 				}
 			} else {
-				o.Input = append(o.Input, b)
+				o.InsertByte(b)
 				o.RenderBar()
 			}
 		}
@@ -327,6 +366,20 @@ func (o *Overlay) HandleEscape(remaining []byte) (consumed int, handled bool) {
 			return 2, true
 		}
 		return 1, true
+	case 'f': // meta+f — forward word
+		if o.Mode == ModeDefault && len(o.Input) > 0 {
+			o.CursorForwardWord()
+			o.RenderBar()
+			return 1, true
+		}
+		return 0, false
+	case 'b': // meta+b — backward word
+		if o.Mode == ModeDefault && len(o.Input) > 0 {
+			o.CursorBackwardWord()
+			o.RenderBar()
+			return 1, true
+		}
+		return 0, false
 	}
 	return 0, false
 }
@@ -390,6 +443,15 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 				o.MenuPrev()
 			} else {
 				o.MenuNext()
+			}
+			o.RenderBar()
+			break
+		}
+		if o.Mode == ModeDefault && len(o.Input) > 0 {
+			if final == 'D' {
+				o.CursorLeft()
+			} else {
+				o.CursorRight()
 			}
 			o.RenderBar()
 		}
