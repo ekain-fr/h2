@@ -716,10 +716,56 @@ func TestHelpLabel_Default(t *testing.T) {
 	}
 }
 
+func TestMenu_DetachCallsCallback(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	called := false
+	o.OnDetach = func() { called = true }
+	buf := []byte{'d'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if !called {
+		t.Fatal("expected OnDetach to be called")
+	}
+	if o.Mode != ModeDefault {
+		t.Fatalf("expected ModeDefault after detach, got %d", o.Mode)
+	}
+}
+
+func TestMenu_DetachUppercase(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	called := false
+	o.OnDetach = func() { called = true }
+	buf := []byte{'D'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if !called {
+		t.Fatal("expected OnDetach to be called")
+	}
+}
+
+func TestMenu_DetachIgnoredWithoutCallback(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	buf := []byte{'d'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu when OnDetach is nil, got %d", o.Mode)
+	}
+}
+
 func TestMenuLabel(t *testing.T) {
 	o := newTestOverlay(10, 80)
 	got := o.MenuLabel()
 	if got != "Menu | Enter:passthrough | c:clear | r:redraw | q:quit" {
+		t.Fatalf("unexpected menu label: %q", got)
+	}
+}
+
+func TestMenuLabel_WithDetach(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.OnDetach = func() {}
+	got := o.MenuLabel()
+	if got != "Menu | Enter:passthrough | c:clear | r:redraw | d:detach | q:quit" {
 		t.Fatalf("unexpected menu label: %q", got)
 	}
 }

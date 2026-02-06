@@ -55,6 +55,9 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 		vt.Resize(req.Rows, req.Cols, childRows)
 	}
 
+	// Set detach callback to close the client connection.
+	ov.OnDetach = func() { conn.Close() }
+
 	// Send full screen redraw and enable mouse reporting.
 	vt.Output.Write([]byte("\033[2J\033[H"))
 	vt.Output.Write([]byte("\033[?1000h\033[?1006h"))
@@ -67,6 +70,7 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 
 	// Client disconnected — detach. Disable mouse before swapping output.
 	vt.Mu.Lock()
+	ov.OnDetach = nil
 	vt.Output.Write([]byte("\033[?1000l\033[?1006l"))
 	vt.Output = io.Discard
 	vt.InputSrc = &blockingReader{}

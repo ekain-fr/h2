@@ -51,6 +51,7 @@ type Overlay struct {
 	OtelMetrics  func() (totalTokens int64, totalCostUSD float64, connected bool, port int) // returns OTEL metrics for status bar
 	OnSubmit     func(text string, priority message.Priority)     // called for non-normal input
 	OnOutput     func()                                           // called after each child output
+	OnDetach     func()                                           // called when user selects detach from menu
 
 	// Child process lifecycle.
 	ChildExited     bool

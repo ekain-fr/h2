@@ -186,6 +186,13 @@ func (o *Overlay) HandleMenuBytes(buf []byte, start, n int) int {
 			o.RenderScreen()
 			o.setMode(ModeDefault)
 			o.RenderBar()
+		case 'd', 'D': // detach
+			if o.OnDetach != nil {
+				o.setMode(ModeDefault)
+				o.RenderBar()
+				o.OnDetach()
+				return n
+			}
 		case 'q', 'Q': // quit
 			o.Quit = true
 			o.VT.Cmd.Process.Signal(syscall.SIGTERM)

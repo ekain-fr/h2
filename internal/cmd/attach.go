@@ -99,12 +99,6 @@ func doAttach(name string) error {
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
-				// Check for detach key: ctrl+\ (0x1C)
-				for _, b := range buf[:n] {
-					if b == 0x1C {
-						return
-					}
-				}
 				if err := message.WriteFrame(conn, message.FrameTypeData, buf[:n]); err != nil {
 					return
 				}
