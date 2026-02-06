@@ -273,7 +273,11 @@ func (o *Overlay) RenderBar() {
 		}
 	}
 
-	buf.WriteString("\033[?25h")
+	if o.Mode == ModePassthrough {
+		buf.WriteString("\033[?25l")
+	} else {
+		buf.WriteString("\033[?25h")
+	}
 	o.VT.Output.Write(buf.Bytes())
 }
 
