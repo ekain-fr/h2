@@ -26,9 +26,6 @@ const (
 	ModeScroll
 )
 
-// MenuItems are the built-in menu entries.
-var MenuItems = []string{"Clear input", "Redraw", "Scroll", "Quit"}
-
 // Overlay owns all UI state and holds a pointer to the underlying VT.
 type Overlay struct {
 	VT          *virtualterminal.VT
@@ -39,9 +36,6 @@ type Overlay struct {
 	Saved       []byte
 	Quit        bool
 	Mode        InputMode
-	MenuIdx     int
-	PendingSlash bool
-	SlashTimer   *time.Timer
 	PendingEsc     bool
 	EscTimer       *time.Timer
 	PassthroughEsc []byte

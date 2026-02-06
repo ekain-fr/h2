@@ -3,6 +3,7 @@ package overlay
 import (
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"h2/internal/message"
@@ -164,6 +165,7 @@ func (o *Overlay) HandleMenuBytes(buf []byte, start, n int) int {
 			if handled {
 				continue
 			}
+			// Bare Esc — exit menu
 			if i == n {
 				o.setMode(ModeDefault)
 				o.RenderBar()
@@ -171,10 +173,22 @@ func (o *Overlay) HandleMenuBytes(buf []byte, start, n int) int {
 			continue
 		}
 		switch b {
-		case 0x0D, 0x0A:
-			o.MenuSelect()
+		case 0x0D, 0x0A: // Enter — passthrough mode
+			o.setMode(ModePassthrough)
+			o.RenderBar()
+		case 'c', 'C': // clear input
+			o.Input = o.Input[:0]
+			o.CursorPos = 0
 			o.setMode(ModeDefault)
 			o.RenderBar()
+		case 'r', 'R': // redraw screen
+			o.VT.Output.Write([]byte("\033[2J\033[H"))
+			o.RenderScreen()
+			o.setMode(ModeDefault)
+			o.RenderBar()
+		case 'q', 'Q': // quit
+			o.Quit = true
+			o.VT.Cmd.Process.Signal(syscall.SIGTERM)
 		}
 	}
 	return n
@@ -189,49 +203,6 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 		b := buf[i]
 		i++
 
-		if o.PendingSlash {
-			o.CancelPendingSlash()
-			if b == '/' {
-				o.setMode(ModeMenu)
-				o.MenuIdx = 0
-				o.RenderBar()
-				continue
-			}
-			o.setMode(ModePassthrough)
-			if !o.writePTYOrHang([]byte{'/'}) {
-				return n
-			}
-			o.RenderBar()
-			switch b {
-			case 0x0D, 0x0A:
-				if !o.writePTYOrHang([]byte{'\r'}) {
-					return n
-				}
-				o.setMode(ModeDefault)
-				o.RenderBar()
-			case 0x1B:
-				if i == n {
-					o.setMode(ModeDefault)
-					o.RenderBar()
-				} else {
-					if !o.writePTYOrHang([]byte{0x1B}) {
-						return n
-					}
-				}
-			default:
-				if !o.writePTYOrHang([]byte{b}) {
-					return n
-				}
-			}
-			continue
-		}
-
-		if b == '/' && len(o.Input) == 0 {
-			o.StartPendingSlash()
-			o.RenderBar()
-			continue
-		}
-
 		if b == 0x1B {
 			consumed, handled := o.HandleEscape(buf[i:n])
 			i += consumed
@@ -242,6 +213,18 @@ func (o *Overlay) HandleDefaultBytes(buf []byte, start, n int) int {
 		}
 
 		switch b {
+		case 0x02: // ctrl+b — open menu
+			o.setMode(ModeMenu)
+			o.RenderBar()
+
+		case 0x10: // ctrl+p — history up
+			o.HistoryUp()
+			o.RenderBar()
+
+		case 0x0E: // ctrl+n — history down
+			o.HistoryDown()
+			o.RenderBar()
+
 		case 0x09:
 			o.CyclePriority()
 			o.RenderBar()
@@ -418,33 +401,10 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			}
 			break
 		}
-		if o.Mode == ModeMenu {
-			if final == 'A' {
-				o.MenuPrev()
-			} else {
-				o.MenuNext()
-			}
-			o.RenderBar()
-			break
-		}
-		if final == 'A' {
-			o.HistoryUp()
-		} else {
-			o.HistoryDown()
-		}
-		o.RenderBar()
+		// Up/Down in default or menu mode: no-op
 	case 'C', 'D':
 		if o.Mode == ModePassthrough {
 			o.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
-			break
-		}
-		if o.Mode == ModeMenu {
-			if final == 'D' {
-				o.MenuPrev()
-			} else {
-				o.MenuNext()
-			}
-			o.RenderBar()
 			break
 		}
 		if o.Mode == ModeDefault && len(o.Input) > 0 {
@@ -460,33 +420,6 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 	}
 
 	return totalConsumed, true
-}
-
-func (o *Overlay) StartPendingSlash() {
-	o.PendingSlash = true
-	if o.SlashTimer != nil {
-		o.SlashTimer.Stop()
-	}
-	o.SlashTimer = time.AfterFunc(250*time.Millisecond, func() {
-		o.VT.Mu.Lock()
-		defer o.VT.Mu.Unlock()
-		if !o.PendingSlash || o.Mode != ModeDefault {
-			return
-		}
-		o.PendingSlash = false
-		o.setMode(ModePassthrough)
-		if !o.writePTYOrHang([]byte{'/'}) {
-			return
-		}
-		o.RenderBar()
-	})
-}
-
-func (o *Overlay) CancelPendingSlash() {
-	o.PendingSlash = false
-	if o.SlashTimer != nil {
-		o.SlashTimer.Stop()
-	}
 }
 
 // priorityOrder defines the Tab cycling order for input priorities.

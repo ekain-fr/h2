@@ -305,11 +305,11 @@ func (o *Overlay) HelpLabel() string {
 	case ModePassthrough:
 		return "Enter/Esc exit"
 	case ModeMenu:
-		return "Left/Right move | Enter select | Esc exit"
+		return "esc exit"
 	case ModeScroll:
 		return "Scroll/Up/Down navigate | Esc exit scroll"
 	default:
-		return "Up/Down history | Enter send | / passthrough | // menu"
+		return "ctrl+p/n history | Enter send | ctrl+b menu"
 	}
 }
 
@@ -328,15 +328,7 @@ func (o *Overlay) StatusLabel() string {
 
 // MenuLabel returns the formatted menu display.
 func (o *Overlay) MenuLabel() string {
-	var parts []string
-	for i, item := range MenuItems {
-		if i == o.MenuIdx {
-			parts = append(parts, ">"+item)
-		} else {
-			parts = append(parts, item)
-		}
-	}
-	return "Menu: " + strings.Join(parts, " | ")
+	return "enter:passthrough  c:clear  r:redraw  q:quit"
 }
 
 // DebugLabel returns the debug keystroke display.

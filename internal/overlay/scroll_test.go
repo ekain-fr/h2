@@ -444,30 +444,6 @@ func TestRenderLiveView_SmallContent(t *testing.T) {
 	}
 }
 
-// --- Menu integration ---
-
-func TestMenuItems_ContainsScroll(t *testing.T) {
-	found := false
-	for _, item := range MenuItems {
-		if item == "Scroll" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected MenuItems to contain 'Scroll'")
-	}
-}
-
-func TestMenuSelect_Scroll(t *testing.T) {
-	o := newTestOverlay(10, 80)
-	o.MenuIdx = 2
-	o.MenuSelect()
-	if o.Mode != ModeScroll {
-		t.Fatalf("expected ModeScroll after selecting Scroll menu item, got %d", o.Mode)
-	}
-}
-
 // --- Mode labels ---
 
 func TestModeLabel_Scroll(t *testing.T) {
@@ -597,5 +573,153 @@ func TestHandleScrollBytes_CtrlPassthrough(t *testing.T) {
 	}
 	if o.ScrollOffset != 5 {
 		t.Fatalf("expected offset 5, got %d", o.ScrollOffset)
+	}
+}
+
+// --- ctrl+b / ctrl+p / ctrl+n ---
+
+func TestCtrlB_EntersMenuMode(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	buf := []byte{0x02} // ctrl+b
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu, got %d", o.Mode)
+	}
+}
+
+func TestCtrlB_EntersMenuWithInput(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Input = []byte("hello")
+	o.CursorPos = 5
+	buf := []byte{0x02} // ctrl+b
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu, got %d", o.Mode)
+	}
+}
+
+func TestCtrlP_HistoryUp(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.History = []string{"first", "second"}
+	o.HistIdx = -1
+	buf := []byte{0x10} // ctrl+p
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if string(o.Input) != "second" {
+		t.Fatalf("expected 'second', got %q", string(o.Input))
+	}
+}
+
+func TestCtrlN_HistoryDown(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.History = []string{"first", "second"}
+	o.HistIdx = -1
+	// Go up twice, then down once.
+	o.HandleDefaultBytes([]byte{0x10}, 0, 1)
+	o.HandleDefaultBytes([]byte{0x10}, 0, 1)
+	o.HandleDefaultBytes([]byte{0x0E}, 0, 1) // ctrl+n
+	if string(o.Input) != "second" {
+		t.Fatalf("expected 'second', got %q", string(o.Input))
+	}
+}
+
+func TestUpDown_NoOpInDefaultMode(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.History = []string{"first", "second"}
+	o.HistIdx = -1
+	// ESC [ A = arrow up — should be a no-op in default mode
+	buf := []byte{0x1B, '[', 'A'}
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if string(o.Input) != "" {
+		t.Fatalf("expected empty input after up arrow, got %q", string(o.Input))
+	}
+	if o.HistIdx != -1 {
+		t.Fatalf("expected HistIdx -1, got %d", o.HistIdx)
+	}
+}
+
+// --- Menu shortcut keys ---
+
+func TestMenu_EnterPassthrough(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	buf := []byte{0x0D} // Enter
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModePassthrough {
+		t.Fatalf("expected ModePassthrough, got %d", o.Mode)
+	}
+}
+
+func TestMenu_ClearInput(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	o.Input = []byte("some text")
+	o.CursorPos = 9
+	buf := []byte{'c'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModeDefault {
+		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	}
+	if len(o.Input) != 0 {
+		t.Fatalf("expected empty input, got %q", string(o.Input))
+	}
+	if o.CursorPos != 0 {
+		t.Fatalf("expected CursorPos 0, got %d", o.CursorPos)
+	}
+}
+
+func TestMenu_Redraw(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	buf := []byte{'r'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModeDefault {
+		t.Fatalf("expected ModeDefault after redraw, got %d", o.Mode)
+	}
+}
+
+func TestMenu_EscExits(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	// Bare Esc at end of buffer
+	buf := []byte{0x1B}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModeDefault {
+		t.Fatalf("expected ModeDefault after Esc, got %d", o.Mode)
+	}
+}
+
+func TestMenu_OtherKeysIgnored(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	buf := []byte{'x', 'z', '1'}
+	o.HandleMenuBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu (other keys ignored), got %d", o.Mode)
+	}
+}
+
+func TestMenu_HelpLabel(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeMenu
+	got := o.HelpLabel()
+	if got != "esc exit" {
+		t.Fatalf("expected 'esc exit', got %q", got)
+	}
+}
+
+func TestHelpLabel_Default(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeDefault
+	got := o.HelpLabel()
+	if got != "ctrl+p/n history | Enter send | ctrl+b menu" {
+		t.Fatalf("unexpected help label: %q", got)
+	}
+}
+
+func TestMenuLabel(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	got := o.MenuLabel()
+	if got != "enter:passthrough  c:clear  r:redraw  q:quit" {
+		t.Fatalf("unexpected menu label: %q", got)
 	}
 }
