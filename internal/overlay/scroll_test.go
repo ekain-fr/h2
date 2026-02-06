@@ -186,7 +186,7 @@ func TestHandleSGRMouse_ScrollUpEntersMode(t *testing.T) {
 	}
 
 	// SGR mouse scroll up: button 64. Params = "<64;1;1"
-	o.HandleSGRMouse([]byte("<64;1;1"))
+	o.HandleSGRMouse([]byte("<64;1;1"), true)
 	if o.Mode != ModeScroll {
 		t.Fatalf("expected ModeScroll, got %d", o.Mode)
 	}
@@ -205,7 +205,7 @@ func TestHandleSGRMouse_ScrollDownInMode(t *testing.T) {
 	o.ScrollUp(10)
 
 	before := o.ScrollOffset
-	o.HandleSGRMouse([]byte("<65;1;1"))
+	o.HandleSGRMouse([]byte("<65;1;1"), true)
 	if o.ScrollOffset != before-scrollStep {
 		t.Fatalf("expected offset %d, got %d", before-scrollStep, o.ScrollOffset)
 	}
@@ -214,7 +214,7 @@ func TestHandleSGRMouse_ScrollDownInMode(t *testing.T) {
 func TestHandleSGRMouse_IgnoredInPassthrough(t *testing.T) {
 	o := newTestOverlay(10, 80)
 	o.Mode = ModePassthrough
-	o.HandleSGRMouse([]byte("<64;1;1"))
+	o.HandleSGRMouse([]byte("<64;1;1"), true)
 	if o.Mode != ModePassthrough {
 		t.Fatalf("expected mode to stay ModePassthrough, got %d", o.Mode)
 	}
@@ -223,19 +223,77 @@ func TestHandleSGRMouse_IgnoredInPassthrough(t *testing.T) {
 func TestHandleSGRMouse_MalformedParams(t *testing.T) {
 	o := newTestOverlay(10, 80)
 	// No '<' prefix
-	o.HandleSGRMouse([]byte("64;1;1"))
+	o.HandleSGRMouse([]byte("64;1;1"), true)
 	if o.Mode != ModeDefault {
 		t.Fatalf("expected ModeDefault, got %d", o.Mode)
 	}
 	// Too few params
-	o.HandleSGRMouse([]byte("<64"))
+	o.HandleSGRMouse([]byte("<64"), true)
 	if o.Mode != ModeDefault {
 		t.Fatalf("expected ModeDefault, got %d", o.Mode)
 	}
 	// Non-numeric button
-	o.HandleSGRMouse([]byte("<abc;1;1"))
+	o.HandleSGRMouse([]byte("<abc;1;1"), true)
 	if o.Mode != ModeDefault {
 		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	}
+}
+
+func TestHandleSGRMouse_LeftClickShowsSelectHint(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.HandleSGRMouse([]byte("<0;5;5"), true)
+	if !o.SelectHint {
+		t.Fatal("expected SelectHint to be true after left click")
+	}
+	if o.SelectHintTimer == nil {
+		t.Fatal("expected SelectHintTimer to be set")
+	}
+	o.SelectHintTimer.Stop()
+}
+
+func TestHandleSGRMouse_LeftClickReleaseNoHint(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.HandleSGRMouse([]byte("<0;5;5"), false) // release, not press
+	if o.SelectHint {
+		t.Fatal("expected SelectHint to be false on release")
+	}
+}
+
+func TestRenderSelectHint_DefaultMode(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.SelectHint = true
+	var buf bytes.Buffer
+	o.renderSelectHint(&buf)
+	output := buf.String()
+	if len(output) == 0 {
+		t.Fatal("expected hint output")
+	}
+	// Hint should be on row 1 in default mode.
+	if !bytes.Contains([]byte(output), []byte("hold shift to select")) {
+		t.Fatal("expected hint text in output")
+	}
+}
+
+func TestRenderSelectHint_ScrollMode(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.Mode = ModeScroll
+	o.SelectHint = true
+	var buf bytes.Buffer
+	o.renderSelectHint(&buf)
+	output := buf.String()
+	// Hint should be on row 2 when scrolling.
+	if !bytes.Contains([]byte(output), []byte("[2;")) {
+		t.Fatal("expected hint on row 2 in scroll mode")
+	}
+}
+
+func TestRenderSelectHint_NotShownWhenFalse(t *testing.T) {
+	o := newTestOverlay(10, 80)
+	o.SelectHint = false
+	var buf bytes.Buffer
+	o.renderSelectHint(&buf)
+	if buf.Len() != 0 {
+		t.Fatal("expected no output when SelectHint is false")
 	}
 }
 

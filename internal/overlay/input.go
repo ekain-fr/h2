@@ -456,7 +456,7 @@ func (o *Overlay) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			o.RenderBar()
 		}
 	case 'M', 'm':
-		o.HandleSGRMouse(remaining[:i])
+		o.HandleSGRMouse(remaining[:i], final == 'M')
 	}
 
 	return totalConsumed, true
@@ -616,8 +616,9 @@ func (o *Overlay) ClampScrollOffset() {
 
 // HandleSGRMouse processes an SGR mouse event. The params bytes contain
 // the "<Cb;Cx;Cy" portion (everything between ESC[ and the final M/m).
-// Button 64 = scroll up, button 65 = scroll down.
-func (o *Overlay) HandleSGRMouse(params []byte) {
+// press is true for button press (M), false for release (m).
+// Button 0 = left click, 64 = scroll up, 65 = scroll down.
+func (o *Overlay) HandleSGRMouse(params []byte, press bool) {
 	// SGR mouse format: ESC [ < Cb ; Cx ; Cy M/m
 	// params should start with '<' followed by Cb;Cx;Cy
 	s := string(params)
@@ -635,6 +636,10 @@ func (o *Overlay) HandleSGRMouse(params []byte) {
 	}
 
 	switch button {
+	case 0: // left click
+		if press {
+			o.ShowSelectHint()
+		}
 	case 64: // scroll up
 		if o.Mode == ModePassthrough {
 			return
@@ -648,4 +653,21 @@ func (o *Overlay) HandleSGRMouse(params []byte) {
 			o.ScrollDown(scrollStep)
 		}
 	}
+}
+
+// ShowSelectHint displays a transient hint about using shift for text selection.
+func (o *Overlay) ShowSelectHint() {
+	o.SelectHint = true
+	if o.SelectHintTimer != nil {
+		o.SelectHintTimer.Stop()
+	}
+	o.RenderScreen()
+	o.RenderBar()
+	o.SelectHintTimer = time.AfterFunc(3*time.Second, func() {
+		o.VT.Mu.Lock()
+		defer o.VT.Mu.Unlock()
+		o.SelectHint = false
+		o.RenderScreen()
+		o.RenderBar()
+	})
 }

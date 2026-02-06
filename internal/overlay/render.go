@@ -25,7 +25,25 @@ func (o *Overlay) RenderScreen() {
 	} else {
 		o.renderLiveView(&buf)
 	}
+	o.renderSelectHint(&buf)
 	o.VT.Output.Write(buf.Bytes())
+}
+
+// renderSelectHint draws the "hold shift to select" hint when active.
+func (o *Overlay) renderSelectHint(buf *bytes.Buffer) {
+	if !o.SelectHint {
+		return
+	}
+	hint := "(hold shift to select)"
+	row := 1
+	if o.Mode == ModeScroll {
+		row = 2
+	}
+	col := o.VT.Cols - len(hint) + 1
+	if col < 1 {
+		col = 1
+	}
+	fmt.Fprintf(buf, "\033[%d;%dH\033[7m%s\033[0m", row, col, hint)
 }
 
 // renderLiveView renders the live terminal content, anchored to the cursor.

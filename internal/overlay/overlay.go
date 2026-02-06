@@ -45,8 +45,10 @@ type Overlay struct {
 	PendingEsc     bool
 	EscTimer       *time.Timer
 	PassthroughEsc []byte
-	ScrollOffset  int
-	InputPriority message.Priority
+	ScrollOffset    int
+	SelectHint      bool
+	SelectHintTimer *time.Timer
+	InputPriority   message.Priority
 	DebugKeys     bool
 	DebugKeyBuf  []string
 	AgentName    string
