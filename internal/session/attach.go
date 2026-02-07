@@ -40,12 +40,9 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 
 	vt := s.VT
 
-	// Swap VT I/O to use this attach connection's client.
-	// For now, the last-attached client controls VT.Output (single-writer).
-	// Phase 5 will add proper passthrough locking.
+	// Set up per-client output for this connection.
 	vt.Mu.Lock()
-	vt.Output = &frameWriter{conn: conn}
-	vt.InputSrc = &frameInputReader{conn: conn}
+	cl.Output = &frameWriter{conn: conn}
 
 	// Resize PTY to client's terminal size.
 	if req.Cols > 0 && req.Rows > 0 {
@@ -57,8 +54,8 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	cl.OnDetach = func() { conn.Close() }
 
 	// Send full screen redraw and enable mouse reporting.
-	vt.Output.Write([]byte("\033[2J\033[H"))
-	vt.Output.Write([]byte("\033[?1000h\033[?1006h"))
+	cl.Output.Write([]byte("\033[2J\033[H"))
+	cl.Output.Write([]byte("\033[?1000h\033[?1006h"))
 	cl.RenderScreen()
 	cl.RenderBar()
 	vt.Mu.Unlock()
@@ -66,10 +63,10 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	// Read input frames from client until disconnect.
 	d.readClientInput(conn, cl)
 
-	// Client disconnected — detach. Disable mouse before swapping output.
+	// Client disconnected — detach. Disable mouse on this client's output.
 	vt.Mu.Lock()
 	cl.OnDetach = nil
-	vt.Output.Write([]byte("\033[?1000l\033[?1006l"))
+	cl.Output.Write([]byte("\033[?1000l\033[?1006l"))
 
 	// Release passthrough ownership if this client held it.
 	if s.PassthroughOwner == cl {
@@ -79,15 +76,6 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 
 	// Remove this client from the session.
 	s.RemoveClient(cl)
-
-	// If no more clients, output goes to discard.
-	s.clientsMu.Lock()
-	hasClients := len(s.Clients) > 0
-	s.clientsMu.Unlock()
-	if !hasClients {
-		vt.Output = io.Discard
-		vt.InputSrc = &blockingReader{}
-	}
 	vt.Mu.Unlock()
 
 	_ = attach // keep reference alive for the duration
@@ -138,7 +126,7 @@ func (d *Daemon) readClientInput(conn net.Conn, cl *client.Client) {
 				if cl.Mode == client.ModeScroll {
 					cl.ClampScrollOffset()
 				}
-				vt.Output.Write([]byte("\033[2J"))
+				cl.Output.Write([]byte("\033[2J"))
 				cl.RenderScreen()
 				cl.RenderBar()
 				vt.Mu.Unlock()

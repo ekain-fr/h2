@@ -143,6 +143,7 @@ func (s *Session) initVT(rows, cols int) {
 func (s *Session) NewClient() *client.Client {
 	cl := &client.Client{
 		VT:        s.VT,
+		Output:    io.Discard, // overridden by caller (attach sets frameWriter, interactive sets os.Stdout)
 		AgentName: s.Name,
 	}
 	cl.InitClient()
@@ -347,6 +348,7 @@ func (s *Session) RunInteractive() error {
 	s.VT.Scrollback.AppendOnly = true
 	s.VT.LastOut = time.Now()
 	s.VT.Output = os.Stdout
+	s.Client.Output = os.Stdout
 	s.VT.InputSrc = os.Stdin
 
 	// Set up delivery callback.
@@ -443,7 +445,7 @@ func (s *Session) lifecycleLoop(stopStatus chan struct{}, interactive bool) erro
 			s.VT.LastOut = time.Now()
 			s.ForEachClient(func(cl *client.Client) {
 				cl.ScrollOffset = 0
-				s.VT.Output.Write([]byte("\033[2J\033[H"))
+				cl.Output.Write([]byte("\033[2J\033[H"))
 				cl.RenderScreen()
 				cl.RenderBar()
 			})

@@ -191,7 +191,7 @@ func (c *Client) HandleMenuBytes(buf []byte, start, n int) int {
 			c.setMode(ModeDefault)
 			c.RenderBar()
 		case 'r', 'R': // redraw screen
-			c.VT.Output.Write([]byte("\033[2J\033[H"))
+			c.Output.Write([]byte("\033[2J\033[H"))
 			c.RenderScreen()
 			c.setMode(ModeDefault)
 			c.RenderBar()

@@ -23,8 +23,9 @@ func newTestClient(childRows, cols int) *Client {
 	sb.AppendOnly = true
 	vt.Scrollback = sb
 	return &Client{
-		VT:   vt,
-		Mode: ModeDefault,
+		VT:     vt,
+		Output: io.Discard,
+		Mode:   ModeDefault,
 	}
 }
 

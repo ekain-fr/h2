@@ -1,6 +1,7 @@
 package client
 
 import (
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -31,6 +32,7 @@ const (
 // Client owns all UI state and holds a pointer to the underlying VT.
 type Client struct {
 	VT          *virtualterminal.VT
+	Output      io.Writer // per-client output (each client writes to its own connection)
 	Input       []byte
 	CursorPos   int // byte offset within Input
 	History     []string
@@ -139,7 +141,7 @@ func (c *Client) WatchResize(sigCh <-chan os.Signal) {
 		if c.Mode == ModeScroll {
 			c.ClampScrollOffset()
 		}
-		c.VT.Output.Write([]byte("\033[2J"))
+		c.Output.Write([]byte("\033[2J"))
 		c.RenderScreen()
 		c.RenderBar()
 		c.VT.Mu.Unlock()
@@ -195,7 +197,7 @@ func (c *Client) SetupInteractiveTerminal() (cleanup func(), stopStatus chan str
 
 	// Draw initial UI.
 	c.VT.Mu.Lock()
-	c.VT.Output.Write([]byte("\033[2J\033[H"))
+	c.Output.Write([]byte("\033[2J\033[H"))
 	c.RenderScreen()
 	c.RenderBar()
 	c.VT.Mu.Unlock()

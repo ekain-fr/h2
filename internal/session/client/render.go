@@ -26,7 +26,7 @@ func (c *Client) RenderScreen() {
 		c.renderLiveView(&buf)
 	}
 	c.renderSelectHint(&buf)
-	c.VT.Output.Write(buf.Bytes())
+	c.Output.Write(buf.Bytes())
 }
 
 // renderSelectHint draws the "hold shift to select" hint when active.
@@ -278,7 +278,7 @@ func (c *Client) RenderBar() {
 	} else {
 		buf.WriteString("\033[?25h")
 	}
-	c.VT.Output.Write(buf.Bytes())
+	c.Output.Write(buf.Bytes())
 }
 
 // ModeLabel returns the display name for the current mode.
