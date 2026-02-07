@@ -8,27 +8,38 @@ import (
 
 	"github.com/vito/midterm"
 
+	"h2/internal/session/agent"
 	"h2/internal/session/client"
 	"h2/internal/session/message"
 	"h2/internal/session/virtualterminal"
 )
 
+// startWatchState starts the Agent's watchState goroutine via StartCollectors.
+// For GenericType agents (command != "claude"), this starts watchState without
+// any collectors.
+func startWatchState(t *testing.T, s *Session) {
+	t.Helper()
+	if err := s.Agent.StartCollectors(); err != nil {
+		t.Fatalf("StartCollectors: %v", err)
+	}
+}
+
 func TestStateTransitions_ActiveToIdle(t *testing.T) {
 	s := New("test", "true", nil)
 	defer s.Stop()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	// Signal output to ensure we start Active.
 	s.NoteOutput()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != StateActive {
+	if got := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive, got %v", got)
 	}
 
 	// Wait for idle threshold to pass.
-	time.Sleep(idleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != StateIdle {
+	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
+	if got := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle after threshold, got %v", got)
 	}
 }
@@ -37,18 +48,18 @@ func TestStateTransitions_IdleToActive(t *testing.T) {
 	s := New("test", "true", nil)
 	defer s.Stop()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	// Let it go idle.
-	time.Sleep(idleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != StateIdle {
+	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
+	if got := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle, got %v", got)
 	}
 
 	// Signal output — should go back to Active.
 	s.NoteOutput()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != StateActive {
+	if got := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive after output, got %v", got)
 	}
 }
@@ -57,29 +68,27 @@ func TestStateTransitions_Exited(t *testing.T) {
 	s := New("test", "true", nil)
 	defer s.Stop()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	s.NoteExit()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != StateExited {
+	if got := s.State(); got != agent.StateExited {
 		t.Fatalf("expected StateExited, got %v", got)
 	}
 
-	// Output after exit should not change state back.
+	// Output after exit should NOT change state back — exited is sticky.
 	s.NoteOutput()
-	// The idle timer might fire but exited should stick since
-	// watchState won't override exited.
 	time.Sleep(50 * time.Millisecond)
-	// Note: NoteOutput sends on outputNotify, which causes setState(StateActive).
-	// This is a design choice — if the child relaunches, output resumes.
-	// For this test, we just verify NoteExit works.
+	if got := s.State(); got != agent.StateExited {
+		t.Fatalf("expected StateExited to be sticky after output, got %v", got)
+	}
 }
 
 func TestWaitForState_ReachesTarget(t *testing.T) {
 	s := New("test", "true", nil)
 	defer s.Stop()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	// Signal output to keep active, then wait for idle.
 	s.NoteOutput()
@@ -88,7 +97,7 @@ func TestWaitForState_ReachesTarget(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		done <- s.WaitForState(ctx, StateIdle)
+		done <- s.WaitForState(ctx, agent.StateIdle)
 	}()
 
 	// Should eventually reach idle.
@@ -102,7 +111,7 @@ func TestWaitForState_ContextCancelled(t *testing.T) {
 	s := New("test", "true", nil)
 	defer s.Stop()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	// Keep sending output so it never goes idle.
 	stopOutput := make(chan struct{})
@@ -123,7 +132,7 @@ func TestWaitForState_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	result := s.WaitForState(ctx, StateIdle)
+	result := s.WaitForState(ctx, agent.StateIdle)
 	if result {
 		t.Fatal("WaitForState should have returned false when context was cancelled")
 	}
@@ -135,7 +144,7 @@ func TestStateChanged_ClosesOnTransition(t *testing.T) {
 
 	ch := s.StateChanged()
 
-	go s.watchState(s.stopCh)
+	startWatchState(t, s)
 
 	// Wait for any state change (Active→Idle after threshold).
 	select {
@@ -210,13 +219,13 @@ func TestNoteOutput_NonBlocking(t *testing.T) {
 
 func TestStateString(t *testing.T) {
 	tests := []struct {
-		state State
+		state agent.State
 		want  string
 	}{
-		{StateActive, "active"},
-		{StateIdle, "idle"},
-		{StateExited, "exited"},
-		{State(99), "unknown"},
+		{agent.StateActive, "active"},
+		{agent.StateIdle, "idle"},
+		{agent.StateExited, "exited"},
+		{agent.State(99), "unknown"},
 	}
 	for _, tt := range tests {
 		if got := tt.state.String(); got != tt.want {

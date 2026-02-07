@@ -33,6 +33,8 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		d.handleStatus(conn)
 	case "attach":
 		d.handleAttach(conn, req)
+	case "hook_event":
+		d.handleHookEvent(conn, req)
 	default:
 		message.SendResponse(conn, &message.Response{
 			Error: "unknown request type: " + req.Type,
@@ -108,4 +110,26 @@ func (d *Daemon) handleStatus(conn net.Conn) {
 		OK:    true,
 		Agent: d.AgentInfo(),
 	})
+}
+
+func (d *Daemon) handleHookEvent(conn net.Conn, req *message.Request) {
+	defer conn.Close()
+
+	hc := d.Session.Agent.HookCollector()
+	if hc == nil {
+		message.SendResponse(conn, &message.Response{
+			Error: "hook collector not active for this agent",
+		})
+		return
+	}
+
+	if req.EventName == "" {
+		message.SendResponse(conn, &message.Response{
+			Error: "event_name is required",
+		})
+		return
+	}
+
+	hc.ProcessEvent(req.EventName, req.Payload)
+	message.SendResponse(conn, &message.Response{OK: true})
 }

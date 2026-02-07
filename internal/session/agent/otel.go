@@ -13,53 +13,7 @@ import (
 	"time"
 )
 
-// Agent wraps the OTEL collector, agent type, and metrics for a session.
-type Agent struct {
-	agentType  AgentType
-	metrics    *OtelMetrics
-	listener   net.Listener
-	server     *http.Server
-	port       int
-	otelNotify chan struct{} // buffered(1), signaled on OTEL event
-	stopCh     chan struct{}
-}
-
-// New creates a new Agent with the given agent type.
-func New(agentType AgentType) *Agent {
-	return &Agent{
-		agentType:  agentType,
-		metrics:    &OtelMetrics{},
-		otelNotify: make(chan struct{}, 1),
-		stopCh:     make(chan struct{}),
-	}
-}
-
-// OtelNotify returns the channel that is signaled on OTEL events.
-func (a *Agent) OtelNotify() <-chan struct{} {
-	return a.otelNotify
-}
-
-// AgentType returns the agent type.
-func (a *Agent) AgentType() AgentType {
-	return a.agentType
-}
-
-// PrependArgs returns extra args to inject before the user's args,
-// delegating to the agent type.
-func (a *Agent) PrependArgs(sessionID string) []string {
-	if a.agentType == nil {
-		return nil
-	}
-	return a.agentType.PrependArgs(sessionID)
-}
-
-// Metrics returns a snapshot of the current OTEL metrics.
-func (a *Agent) Metrics() OtelMetricsSnapshot {
-	if a.metrics == nil {
-		return OtelMetricsSnapshot{}
-	}
-	return a.metrics.Snapshot()
-}
+// --- OTEL types ---
 
 // OtelLogRecord represents a single log record in OTLP format.
 type OtelLogRecord struct {
@@ -92,6 +46,8 @@ type OtelResourceLogs struct {
 type OtelScopeLogs struct {
 	LogRecords []OtelLogRecord `json:"logRecords"`
 }
+
+// --- OTEL collector methods on Agent ---
 
 // StartOtelCollector starts the OTEL HTTP server on a random port.
 func (a *Agent) StartOtelCollector() error {
@@ -135,37 +91,6 @@ func (a *Agent) StopOtelCollector() {
 	if a.listener != nil {
 		a.listener.Close()
 	}
-}
-
-// OtelPort returns the port the OTEL collector is listening on.
-func (a *Agent) OtelPort() int {
-	return a.port
-}
-
-// ChildEnv returns environment variables to inject into the child process.
-// Delegates to the agent type, passing collector connection info.
-func (a *Agent) ChildEnv() map[string]string {
-	if a.agentType == nil {
-		return nil
-	}
-	return a.agentType.ChildEnv(&CollectorPorts{OtelPort: a.port})
-}
-
-// Stop cleans up the agent resources.
-func (a *Agent) Stop() {
-	a.StopOtelCollector()
-}
-
-// otelDebugLog writes a debug message to ~/.h2/otel-debug.log
-func otelDebugLog(format string, args ...interface{}) {
-	logPath := filepath.Join(os.Getenv("HOME"), ".h2", "otel-debug.log")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	timestamp := time.Now().Format("15:04:05.000")
-	fmt.Fprintf(f, "[%s] %s\n", timestamp, fmt.Sprintf(format, args...))
 }
 
 // processLogs extracts events from an OTLP logs payload.
@@ -254,6 +179,8 @@ func (a *Agent) noteOtelEvent() {
 	}
 }
 
+// --- Helpers ---
+
 // getAttr extracts a string attribute value by key.
 func getAttr(attrs []OtelAttribute, key string) string {
 	for _, a := range attrs {
@@ -262,4 +189,16 @@ func getAttr(attrs []OtelAttribute, key string) string {
 		}
 	}
 	return ""
+}
+
+// otelDebugLog writes a debug message to ~/.h2/otel-debug.log
+func otelDebugLog(format string, args ...interface{}) {
+	logPath := filepath.Join(os.Getenv("HOME"), ".h2", "otel-debug.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	timestamp := time.Now().Format("15:04:05.000")
+	fmt.Fprintf(f, "[%s] %s\n", timestamp, fmt.Sprintf(format, args...))
 }

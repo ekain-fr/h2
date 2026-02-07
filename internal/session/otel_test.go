@@ -107,12 +107,10 @@ func TestOtelCollector_AcceptsLogsAndSignalsActivity(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Check that otelNotify was signaled.
-	select {
-	case <-s.Agent.OtelNotify():
-		// Good — event was signaled.
-	default:
-		t.Fatal("expected otelNotify to be signaled")
+	// Check that the event was received by checking metrics.
+	m := s.Metrics()
+	if !m.EventsReceived {
+		t.Fatal("expected EventsReceived=true after sending logs")
 	}
 }
 
@@ -147,17 +145,14 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 	s := New("test", "claude", nil)
 	defer s.Stop()
 
-	err := s.StartOtelCollector()
-	if err != nil {
-		t.Fatalf("StartOtelCollector failed: %v", err)
+	// StartCollectors starts OTEL (for claude) and the Agent's watchState goroutine.
+	if err := s.Agent.StartCollectors(); err != nil {
+		t.Fatalf("StartCollectors failed: %v", err)
 	}
 
-	// Start watchState.
-	go s.watchState(s.stopCh)
-
 	// Let it go idle.
-	time.Sleep(idleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != StateIdle {
+	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
+	if got := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle, got %v", got)
 	}
 
@@ -184,7 +179,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 	// Give watchState time to process.
 	time.Sleep(100 * time.Millisecond)
 
-	if got := s.State(); got != StateActive {
+	if got := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive after OTEL event, got %v", got)
 	}
 }

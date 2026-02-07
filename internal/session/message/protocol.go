@@ -10,7 +10,7 @@ import (
 
 // Request is the JSON request sent over the Unix socket.
 type Request struct {
-	Type string `json:"type"` // "send", "attach", "show", "status"
+	Type string `json:"type"` // "send", "attach", "show", "status", "hook_event"
 
 	// send fields
 	Priority string `json:"priority,omitempty"`
@@ -23,6 +23,10 @@ type Request struct {
 
 	// show fields
 	MessageID string `json:"message_id,omitempty"`
+
+	// hook_event fields
+	EventName string          `json:"event_name,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 // Response is the JSON response sent back over the Unix socket.
