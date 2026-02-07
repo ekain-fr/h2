@@ -21,6 +21,7 @@ func NewRootCmd() *cobra.Command {
 		newLsAlias(listCmd),
 		newShowCmd(),
 		newDaemonCmd(),
+		newWhoamiCmd(),
 	)
 
 	return rootCmd
