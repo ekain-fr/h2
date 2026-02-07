@@ -17,6 +17,209 @@ Agent (Session)
 └── (future)           — file watcher, log tailer, etc.
 ```
 
+## Agent Types
+
+### The problem with "just a command"
+
+Today, `h2 run --name concierge -- claude` treats `claude` as an opaque executable.
+But h2 already has significant domain knowledge about Claude Code: it injects
+`--session-id`, sets OTEL env vars, parses OTEL events with a Claude-specific
+parser, and (with this proposal) would handle Claude Code hooks. This knowledge
+is scattered across `Session.childArgs()` (hardcoded `s.Command == "claude"`
+check), `Session.New()` (hardcoded `ClaudeCodeHelper`), and the OTEL parser.
+
+As we add more integration points (hooks, collector authority, launch config),
+we need a first-class concept: **agent types**. `claude` in `h2 run claude` is
+not just a command to exec — it's an enum of a supported agent type, and h2 has
+domain knowledge of how to run it.
+
+### AgentType interface
+
+`AgentType` replaces `AgentHelper` and covers the full agent lifecycle:
+
+```go
+// AgentType defines how h2 launches, monitors, and interacts with a specific
+// kind of agent. Each supported agent (Claude Code, generic shell, future types)
+// implements this interface.
+type AgentType interface {
+    // Name returns the agent type identifier (e.g. "claude", "generic").
+    Name() string
+
+    // --- Launch ---
+
+    // Command returns the executable to run.
+    Command() string
+
+    // PrependArgs returns extra args to inject before the user's args.
+    // e.g. Claude returns ["--session-id", uuid] when sessionID is set.
+    PrependArgs(sessionID string) []string
+
+    // ChildEnv returns extra environment variables for the child process.
+    // Called after collectors are started so it can include OTEL endpoints, etc.
+    ChildEnv(collectors *CollectorPorts) map[string]string
+
+    // --- Collectors ---
+
+    // Collectors returns which collectors this agent type supports.
+    Collectors() CollectorSet
+
+    // OtelParser returns the parser for this agent's OTEL events.
+    // Returns nil if OTEL is not supported or no parsing is needed.
+    OtelParser() OtelParser
+
+    // --- Display ---
+
+    // DisplayCommand returns the command name for display purposes.
+    // e.g. "claude" even if the actual binary is "/usr/local/bin/claude".
+    DisplayCommand() string
+}
+
+// CollectorPorts holds connection info for active collectors,
+// passed to ChildEnv so the agent type can configure the child.
+type CollectorPorts struct {
+    OtelPort int  // 0 if OTEL not active
+}
+
+type CollectorSet struct {
+    Otel  bool
+    Hooks bool
+}
+```
+
+### Implementations
+
+```go
+// ClaudeCodeType — full integration: OTEL, hooks, session ID, env vars.
+type ClaudeCodeType struct {
+    parser *ClaudeCodeParser
+}
+
+func (t *ClaudeCodeType) Name() string           { return "claude" }
+func (t *ClaudeCodeType) Command() string         { return "claude" }
+func (t *ClaudeCodeType) DisplayCommand() string   { return "claude" }
+func (t *ClaudeCodeType) Collectors() CollectorSet { return CollectorSet{Otel: true, Hooks: true} }
+func (t *ClaudeCodeType) OtelParser() OtelParser   { return t.parser }
+
+func (t *ClaudeCodeType) PrependArgs(sessionID string) []string {
+    if sessionID != "" {
+        return []string{"--session-id", sessionID}
+    }
+    return nil
+}
+
+func (t *ClaudeCodeType) ChildEnv(cp *CollectorPorts) map[string]string {
+    if cp.OtelPort == 0 {
+        return nil
+    }
+    endpoint := fmt.Sprintf("http://127.0.0.1:%d", cp.OtelPort)
+    return map[string]string{
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+        "OTEL_METRICS_EXPORTER":        "otlp",
+        "OTEL_LOGS_EXPORTER":           "otlp",
+        "OTEL_TRACES_EXPORTER":         "none",
+        "OTEL_EXPORTER_OTLP_PROTOCOL":  "http/json",
+        "OTEL_EXPORTER_OTLP_ENDPOINT":  endpoint,
+        "OTEL_METRIC_EXPORT_INTERVAL":  "5000",
+        "OTEL_LOGS_EXPORT_INTERVAL":    "1000",
+    }
+}
+
+// GenericType — no integration, just runs a command.
+type GenericType struct {
+    command string
+}
+
+func (t *GenericType) Name() string                           { return "generic" }
+func (t *GenericType) Command() string                         { return t.command }
+func (t *GenericType) DisplayCommand() string                   { return t.command }
+func (t *GenericType) Collectors() CollectorSet                 { return CollectorSet{} }
+func (t *GenericType) OtelParser() OtelParser                   { return nil }
+func (t *GenericType) PrependArgs(sessionID string) []string    { return nil }
+func (t *GenericType) ChildEnv(cp *CollectorPorts) map[string]string { return nil }
+```
+
+### Resolution: command string → AgentType
+
+When the user runs `h2 run -- claude --verbose`, h2 resolves the command to
+an agent type:
+
+```go
+// ResolveAgentType maps a command name to a known agent type,
+// falling back to GenericType for unknown commands.
+func ResolveAgentType(command string) AgentType {
+    switch command {
+    case "claude":
+        return NewClaudeCodeType()
+    default:
+        return &GenericType{command: command}
+    }
+}
+```
+
+This replaces the current hardcoded checks:
+- `Session.New()` hardcoding `ClaudeCodeHelper` → now uses `agentType.OtelParser()` etc.
+- `Session.childArgs()` checking `s.Command == "claude"` → now uses `agentType.PrependArgs()`
+- `ClaudeCodeHelper.OtelEnv()` → now `agentType.ChildEnv()`
+
+### How it flows through the system
+
+```
+h2 run --name concierge -- claude --verbose
+  → ResolveAgentType("claude") → ClaudeCodeType
+  → generate sessionID UUID
+  → ForkDaemon(name, sessionID, agentType, userArgs=["--verbose"])
+    → h2 _daemon --name concierge --session-id <uuid> --agent-type claude -- claude --verbose
+      → RunDaemon resolves agentType from --agent-type flag
+      → Agent.Init(agentType)
+        → starts collectors based on agentType.Collectors()
+      → childArgs = agentType.PrependArgs(sessionID) + userArgs
+        → ["--session-id", uuid, "--verbose"]
+      → childEnv = agentType.ChildEnv(collectorPorts) + {"H2_ACTOR": name}
+      → StartPTY(agentType.Command(), childArgs, childEnv)
+```
+
+### Session and Agent changes
+
+The `Session` no longer needs `Command` or `childArgs()`. The Agent holds
+the type and handles launch config:
+
+```go
+type Session struct {
+    Name      string
+    SessionID string
+    AgentType AgentType  // replaces Command string
+    UserArgs  []string   // user-provided args (without injected flags)
+    // ...rest unchanged...
+}
+
+type Agent struct {
+    agentType  AgentType
+    otel       *OtelCollector
+    hooks      *HookCollector
+    // ...
+}
+
+// ChildArgs returns the full args for the child process.
+func (a *Agent) ChildArgs(sessionID string, userArgs []string) []string {
+    prepend := a.agentType.PrependArgs(sessionID)
+    return append(prepend, userArgs...)
+}
+
+// ChildEnv returns env vars for the child process.
+func (a *Agent) ChildEnv(agentName string) map[string]string {
+    ports := &CollectorPorts{}
+    if a.otel != nil {
+        ports.OtelPort = a.otel.Port()
+    }
+    env := a.agentType.ChildEnv(ports)
+    if env == nil {
+        env = make(map[string]string)
+    }
+    env["H2_ACTOR"] = agentName
+    return env
+}
+```
+
 ## Data Model
 
 ### Current state of the world
@@ -53,9 +256,9 @@ and provides its own snapshot type. The `Agent` unifies them into a single
 `StatusSnapshot` that the session and protocol layer consume.
 
 ```go
-// Agent wraps all collectors for a session.
+// Agent wraps the agent type and all collectors for a session.
 type Agent struct {
-    helper      AgentHelper
+    agentType   AgentType            // defines launch config, collectors, parsing
     otel        *OtelCollector       // token counts, cost (may be nil/inactive)
     hooks       *HookCollector       // tool use, lifecycle events (may be nil/inactive)
     // future: fileWatcher, logTailer, etc.
@@ -279,31 +482,20 @@ func (a *Agent) startActivityFanIn() {
 }
 ```
 
-### AgentHelper controls which collectors are active
+### AgentType controls which collectors are active
 
-```go
-type AgentHelper interface {
-    OtelParser() OtelParser
-    OtelEnv(otelPort int) map[string]string
-    Collectors() CollectorSet   // NEW
-}
-
-type CollectorSet struct {
-    Otel  bool   // start OTEL HTTP collector
-    Hooks bool   // accept hook events on socket
-}
-```
-
-`ClaudeCodeHelper` returns `{Otel: true, Hooks: true}`.
-`GenericAgentHelper` returns `{Otel: false, Hooks: false}`.
+The `AgentType` interface (see [Agent Types](#agent-types)) determines which
+collectors to start. `ClaudeCodeType` returns `{Otel: true, Hooks: true}`,
+`GenericType` returns `{}`.
 
 Agent initialization checks these flags:
 
 ```go
-func (a *Agent) Init() {
-    cfg := a.helper.Collectors()
+func (a *Agent) Init(agentType AgentType) {
+    a.agentType = agentType
+    cfg := agentType.Collectors()
     if cfg.Otel {
-        a.otel = NewOtelCollector(a.helper)
+        a.otel = NewOtelCollector(agentType.OtelParser())
     }
     if cfg.Hooks {
         a.hooks = NewHookCollector()
@@ -397,30 +589,42 @@ Users configure Claude Code to call `h2 hook` for desired events:
 
 ## Implementation Order
 
-### Phase 1: Core plumbing
-1. Add `HookCollector` struct to `internal/session/agent/hook_collector.go`
-2. Refactor `Agent` to hold collectors with unified `ActivityNotify()`
-3. Add `hook_event` request type to socket protocol and listener
-4. Add `h2 hook` CLI command
-5. Wire `ActivityNotify()` into session `watchState` (replacing `OtelNotify`)
+### Phase 1: AgentType refactor
+1. Introduce `AgentType` interface in `internal/session/agent/agent_type.go`
+2. Implement `ClaudeCodeType` and `GenericType`
+3. Add `ResolveAgentType()` and wire into `h2 run` / `h2 _daemon`
+4. Remove `AgentHelper` interface, `childArgs()`, hardcoded `s.Command == "claude"` checks
+5. Refactor `Agent` to hold `AgentType` and delegate launch config
 
-### Phase 2: Status exposure
-6. Add collector-derived fields to `AgentInfo`
-7. Update `h2 list` to show current tool/activity (graceful degradation)
-8. Update status bar rendering to use `Agent.Status()` snapshot
+### Phase 2: Hook collector & plumbing
+6. Add `HookCollector` struct to `internal/session/agent/hook_collector.go`
+7. Refactor `Agent` to hold collectors with unified `ActivityNotify()`
+8. Add `hook_event` request type to socket protocol and listener
+9. Add `h2 hook` CLI command
+10. Wire `ActivityNotify()` into session `watchState` (replacing `OtelNotify`)
+
+### Phase 3: Status exposure
+11. Add collector-derived fields to `AgentInfo`
+12. Update `h2 list` to show current tool/activity (graceful degradation)
+13. Update status bar rendering to use `Agent.Status()` snapshot
 
 ## Files to Modify/Create
 
 **New files:**
+- `internal/session/agent/agent_type.go` — AgentType interface, ClaudeCodeType, GenericType, ResolveAgentType
 - `internal/session/agent/hook_collector.go` — HookCollector struct and event processing
 - `internal/cmd/hook.go` — `h2 hook` CLI command
 
 **Modified files:**
-- `internal/session/agent/agent_helper.go` — add Collectors() to AgentHelper interface
-- `internal/session/agent/otel.go` — refactor Agent to hold collectors, add ActivityNotify fan-in
+- `internal/session/agent/otel.go` — refactor Agent to hold AgentType + collectors, add ActivityNotify fan-in
+- `internal/session/agent/agent_helper.go` — delete (replaced by agent_type.go)
+- `internal/session/session.go` — replace Command/Args/childArgs with AgentType, use Agent.ChildArgs/ChildEnv
+- `internal/session/daemon.go` — pass AgentType through ForkDaemon/RunDaemon, add --agent-type flag
+- `internal/cmd/daemon.go` — add --agent-type flag, resolve AgentType
+- `internal/cmd/run.go` — resolve AgentType from command, pass to ForkDaemon
+- `internal/cmd/bridge.go` — same: resolve AgentType for concierge
 - `internal/session/message/protocol.go` — add hook_event request type, AgentInfo fields
 - `internal/session/listener.go` — handle hook_event requests
-- `internal/session/session.go` — use Agent.ActivityNotify() in watchState
 - `internal/cmd/ls.go` — display collector-derived info with graceful degradation
 - `internal/cmd/root.go` — register hook command
 
