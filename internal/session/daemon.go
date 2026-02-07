@@ -71,7 +71,7 @@ func RunDaemon(name, sessionID, command string, args []string) error {
 func (d *Daemon) AgentInfo() *message.AgentInfo {
 	s := d.Session
 	uptime := time.Since(d.StartTime)
-	return &message.AgentInfo{
+	info := &message.AgentInfo{
 		Name:          s.Name,
 		Command:       s.Command,
 		SessionID:     s.SessionID,
@@ -80,6 +80,22 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 		StateDuration: virtualterminal.FormatIdleDuration(s.StateDuration()),
 		QueuedCount:   s.Queue.PendingCount(),
 	}
+
+	// Pull from OTEL collector if active.
+	m := s.Agent.Metrics()
+	if m.EventsReceived {
+		info.TotalTokens = m.TotalTokens
+		info.TotalCostUSD = m.TotalCostUSD
+	}
+
+	// Pull from hook collector if active.
+	if hc := s.Agent.HookCollector(); hc != nil {
+		hs := hc.State()
+		info.LastToolUse = hs.LastToolName
+		info.ToolUseCount = hs.ToolUseCount
+	}
+
+	return info
 }
 
 // ForkDaemon starts a daemon in a background process by re-execing with

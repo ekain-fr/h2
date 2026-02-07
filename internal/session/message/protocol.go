@@ -58,6 +58,14 @@ type AgentInfo struct {
 	State         string `json:"state"`
 	StateDuration string `json:"state_duration"`
 	QueuedCount   int    `json:"queued_count"`
+
+	// OTEL collector data (omitted if collector not active)
+	TotalTokens  int64   `json:"total_tokens,omitempty"`
+	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+
+	// Hook collector data (omitted if collector not active)
+	LastToolUse  string `json:"last_tool_use,omitempty"`
+	ToolUseCount int64  `json:"tool_use_count,omitempty"`
 }
 
 // Attach frame types.
