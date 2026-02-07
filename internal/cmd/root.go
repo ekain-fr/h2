@@ -22,6 +22,8 @@ func NewRootCmd() *cobra.Command {
 		newShowCmd(),
 		newDaemonCmd(),
 		newWhoamiCmd(),
+		newBridgeCmd(),
+		newBridgeDaemonCmd(),
 	)
 
 	return rootCmd

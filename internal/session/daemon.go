@@ -91,6 +91,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 }
 
 // ListAgents scans the socket directory for running agents.
+// Sockets with a "_" prefix (e.g. _bridge) are internal services and excluded.
 func ListAgents() ([]string, error) {
 	dir := SocketDir()
 	entries, err := os.ReadDir(dir)
@@ -103,9 +104,14 @@ func ListAgents() ([]string, error) {
 	var names []string
 	for _, e := range entries {
 		name := e.Name()
-		if filepath.Ext(name) == ".sock" {
-			names = append(names, name[:len(name)-5])
+		if filepath.Ext(name) != ".sock" {
+			continue
 		}
+		base := name[:len(name)-5]
+		if len(base) > 0 && base[0] == '_' {
+			continue
+		}
+		names = append(names, base)
 	}
 	return names, nil
 }
