@@ -8,8 +8,14 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"time"
 
 	"h2/internal/bridge"
+)
+
+const (
+	initialBackoff = 1 * time.Second
+	maxBackoff     = 60 * time.Second
 )
 
 // Telegram implements bridge.Bridge, bridge.Sender, and bridge.Receiver
@@ -94,6 +100,8 @@ func (t *Telegram) Stop() {
 func (t *Telegram) poll(ctx context.Context, handler bridge.InboundHandler) {
 	defer t.wg.Done()
 
+	backoff := initialBackoff
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -104,8 +112,19 @@ func (t *Telegram) poll(ctx context.Context, handler bridge.InboundHandler) {
 			if ctx.Err() != nil {
 				return
 			}
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			continue
 		}
+
+		backoff = initialBackoff
 
 		for _, u := range updates {
 			if u.UpdateID >= t.offset {

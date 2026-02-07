@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -230,5 +231,117 @@ func TestStartStop_FiltersChatID(t *testing.T) {
 	}
 	if received[0] != "right chat" {
 		t.Errorf("got %q, want %q", received[0], "right chat")
+	}
+}
+
+func TestPoll_ExponentialBackoff(t *testing.T) {
+	var requestCount atomic.Int64
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		// Always return an error to trigger backoff
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{
+		Token:   "TOKEN",
+		ChatID:  42,
+		BaseURL: srv.URL,
+	}
+
+	handler := func(agent, body string) {}
+
+	if err := tg.Start(context.Background(), handler); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// With 1s initial backoff, in 3.5 seconds we should see:
+	//   - request 1 at t=0 (fails, wait 1s)
+	//   - request 2 at t=1 (fails, wait 2s)
+	//   - request 3 at t=3 (fails, wait 4s)
+	// Without backoff we'd see dozens of requests.
+	time.Sleep(3500 * time.Millisecond)
+	tg.Stop()
+
+	count := requestCount.Load()
+	if count > 5 {
+		t.Errorf("expected <= 5 requests with backoff, got %d (backoff not working)", count)
+	}
+	if count < 2 {
+		t.Errorf("expected >= 2 requests, got %d (polling not running?)", count)
+	}
+}
+
+func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
+	var mu sync.Mutex
+	var callTimes []time.Time
+	callCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callTimes = append(callTimes, time.Now())
+		n := callCount
+		callCount++
+		mu.Unlock()
+
+		switch {
+		case n == 0:
+			// First call: error to trigger backoff
+			w.WriteHeader(http.StatusInternalServerError)
+		case n == 1:
+			// Second call (after 1s backoff): error again to grow backoff to 2s
+			w.WriteHeader(http.StatusInternalServerError)
+		case n == 2:
+			// Third call (after 2s backoff): succeed to reset backoff
+			json.NewEncoder(w).Encode(getUpdatesResponse{OK: true})
+		case n == 3:
+			// Fourth call (should be immediate after success): error to trigger backoff
+			w.WriteHeader(http.StatusInternalServerError)
+		case n == 4:
+			// Fifth call: should be after 1s (reset backoff), not 4s
+			json.NewEncoder(w).Encode(getUpdatesResponse{OK: true})
+		default:
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{
+		Token:   "TOKEN",
+		ChatID:  42,
+		BaseURL: srv.URL,
+	}
+
+	handler := func(agent, body string) {}
+
+	if err := tg.Start(context.Background(), handler); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Wait for enough calls to verify reset behavior
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := callCount
+		mu.Unlock()
+		if n >= 5 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	tg.Stop()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(callTimes) < 5 {
+		t.Fatalf("expected at least 5 calls, got %d", len(callTimes))
+	}
+
+	// Gap between call 4 and 5 should be ~1s (reset backoff), not ~4s
+	gap := callTimes[4].Sub(callTimes[3])
+	if gap > 2*time.Second {
+		t.Errorf("backoff did not reset after success: gap between call 4 and 5 was %v, expected ~1s", gap)
 	}
 }
