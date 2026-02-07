@@ -1,0 +1,173 @@
+package bridge
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
+	"sync"
+)
+
+// Telegram implements Bridge, Sender, and Receiver using the Telegram Bot API.
+// Standard library only — no external Telegram SDK.
+type Telegram struct {
+	Token  string
+	ChatID int64
+
+	// baseURL overrides the Telegram API base for testing.
+	// If empty, defaults to "https://api.telegram.org".
+	baseURL string
+
+	client http.Client
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	mu     sync.Mutex
+	offset int64
+}
+
+func (t *Telegram) Name() string { return "telegram" }
+
+func (t *Telegram) Close() error {
+	t.Stop()
+	return nil
+}
+
+func (t *Telegram) apiURL(method string) string {
+	base := t.baseURL
+	if base == "" {
+		base = "https://api.telegram.org"
+	}
+	return fmt.Sprintf("%s/bot%s/%s", base, t.Token, method)
+}
+
+// Send posts a text message to the configured chat.
+func (t *Telegram) Send(ctx context.Context, text string) error {
+	resp, err := t.client.PostForm(t.apiURL("sendMessage"), url.Values{
+		"chat_id": {strconv.FormatInt(t.ChatID, 10)},
+		"text":    {text},
+	})
+	if err != nil {
+		return fmt.Errorf("telegram send: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result telegramResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("telegram send: decode response: %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("telegram send: API error: %s", result.Description)
+	}
+	return nil
+}
+
+// Start begins long-polling for incoming messages. It spawns a goroutine
+// that polls getUpdates and calls handler for each message from the
+// configured ChatID.
+func (t *Telegram) Start(ctx context.Context, handler InboundHandler) error {
+	ctx, cancel := context.WithCancel(ctx)
+	t.mu.Lock()
+	t.cancel = cancel
+	t.mu.Unlock()
+
+	t.wg.Add(1)
+	go t.poll(ctx, handler)
+	return nil
+}
+
+// Stop cancels the polling goroutine and waits for it to exit.
+func (t *Telegram) Stop() {
+	t.mu.Lock()
+	cancel := t.cancel
+	t.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	t.wg.Wait()
+}
+
+func (t *Telegram) poll(ctx context.Context, handler InboundHandler) {
+	defer t.wg.Done()
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		updates, err := t.getUpdates(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+
+		for _, u := range updates {
+			if u.UpdateID >= t.offset {
+				t.offset = u.UpdateID + 1
+			}
+			if u.Message == nil || u.Message.Chat.ID != t.ChatID {
+				continue
+			}
+			agent, body := ParseAgentPrefix(u.Message.Text)
+			handler(agent, body)
+		}
+	}
+}
+
+func (t *Telegram) getUpdates(ctx context.Context) ([]telegramUpdate, error) {
+	params := url.Values{
+		"offset":  {strconv.FormatInt(t.offset, 10)},
+		"timeout": {"30"},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", t.apiURL("getUpdates")+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result telegramGetUpdatesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("getUpdates: API error: %s", result.Description)
+	}
+	return result.Result, nil
+}
+
+// Unexported types for JSON parsing.
+
+type telegramResponse struct {
+	OK          bool   `json:"ok"`
+	Description string `json:"description,omitempty"`
+}
+
+type telegramGetUpdatesResponse struct {
+	OK          bool             `json:"ok"`
+	Description string           `json:"description,omitempty"`
+	Result      []telegramUpdate `json:"result"`
+}
+
+type telegramUpdate struct {
+	UpdateID int64            `json:"update_id"`
+	Message  *telegramMessage `json:"message,omitempty"`
+}
+
+type telegramMessage struct {
+	Text string       `json:"text"`
+	Chat telegramChat `json:"chat"`
+}
+
+type telegramChat struct {
+	ID int64 `json:"id"`
+}
