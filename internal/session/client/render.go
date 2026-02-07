@@ -12,6 +12,7 @@ import (
 
 	"github.com/vito/midterm"
 
+	"h2/internal/session/agent"
 	"h2/internal/session/message"
 	"h2/internal/session/virtualterminal"
 )
@@ -165,9 +166,16 @@ func (c *Client) RenderBar() {
 			if c.OtelMetrics != nil {
 				tokens, cost, connected, port := c.OtelMetrics()
 				if connected {
-					label += " | " + formatTokens(tokens) + " " + formatCost(cost)
+					label += " | " + agent.FormatTokens(tokens) + " " + agent.FormatCost(cost)
 				} else {
 					label += fmt.Sprintf(" | [otel:%d]", port)
+				}
+			}
+
+			// Hook collector — current tool
+			if c.HookState != nil {
+				if toolName := c.HookState(); toolName != "" {
+					label += " | " + toolName
 				}
 			}
 
@@ -325,6 +333,22 @@ func (c *Client) HelpLabel() string {
 
 // StatusLabel returns the current activity status.
 func (c *Client) StatusLabel() string {
+	// Use Agent's derived state when available (higher fidelity than PTY timing).
+	if c.AgentState != nil {
+		state, dur := c.AgentState()
+		switch state {
+		case "active":
+			return "Active"
+		case "idle":
+			return "Idle " + dur
+		case "exited":
+			return "Exited"
+		default:
+			return state
+		}
+	}
+
+	// Fallback: PTY output timing.
 	const idleThreshold = 2 * time.Second
 	if c.VT.LastOut.IsZero() {
 		return "Active"
@@ -379,31 +403,6 @@ func (c *Client) AppendDebugBytes(data []byte) {
 			c.DebugKeyBuf = c.DebugKeyBuf[len(c.DebugKeyBuf)-10:]
 		}
 	}
-}
-
-// formatTokens returns a human-readable token count (e.g., "6k", "1.2M").
-func formatTokens(n int64) string {
-	if n < 1000 {
-		return fmt.Sprintf("%d", n)
-	}
-	if n < 10000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
-	}
-	if n < 1000000 {
-		return fmt.Sprintf("%dk", n/1000)
-	}
-	if n < 10000000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1000000)
-	}
-	return fmt.Sprintf("%dM", n/1000000)
-}
-
-// formatCost returns a human-readable cost (e.g., "$0.12", "$1.23").
-func formatCost(usd float64) string {
-	if usd < 0.01 {
-		return fmt.Sprintf("$%.3f", usd)
-	}
-	return fmt.Sprintf("$%.2f", usd)
 }
 
 // exitMessage returns a human-readable description of why the child exited.

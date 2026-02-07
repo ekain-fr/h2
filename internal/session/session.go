@@ -182,6 +182,15 @@ func (s *Session) NewClient() *client.Client {
 		m := s.Agent.Metrics()
 		return m.TotalTokens, m.TotalCostUSD, m.EventsReceived, s.Agent.OtelPort()
 	}
+	cl.AgentState = func() (string, string) {
+		return s.State().String(), virtualterminal.FormatIdleDuration(s.StateDuration())
+	}
+	cl.HookState = func() string {
+		if hc := s.Agent.HookCollector(); hc != nil {
+			return hc.State().LastToolName
+		}
+		return ""
+	}
 	cl.OnSubmit = func(text string, pri message.Priority) {
 		s.SubmitInput(text, pri)
 	}
