@@ -172,6 +172,17 @@ func (c *Client) HandleMenuBytes(buf []byte, start, n int) int {
 		}
 		switch b {
 		case 0x0D, 0x0A: // Enter — passthrough mode
+			if c.TryPassthrough != nil && !c.TryPassthrough() {
+				// Locked by another client — stay in menu.
+				c.RenderBar()
+				continue
+			}
+			c.setMode(ModePassthrough)
+			c.RenderBar()
+		case 't', 'T': // take over passthrough from another client
+			if c.TakePassthrough != nil {
+				c.TakePassthrough()
+			}
 			c.setMode(ModePassthrough)
 			c.RenderBar()
 		case 'c', 'C': // clear input

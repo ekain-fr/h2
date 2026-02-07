@@ -54,8 +54,9 @@ type Session struct {
 	Agent     *agent.Agent
 	VT        *virtualterminal.VT
 	Client    *client.Client // primary/interactive client (nil in daemon-only)
-	Clients   []*client.Client
-	clientsMu sync.Mutex
+	Clients          []*client.Client
+	clientsMu        sync.Mutex
+	PassthroughOwner *client.Client // which client owns passthrough mode (nil = none)
 
 	// ExtraEnv holds additional environment variables to pass to the child process.
 	ExtraEnv map[string]string
@@ -161,11 +162,40 @@ func (s *Session) NewClient() *client.Client {
 		}
 	}
 	cl.OnModeChange = func(mode client.InputMode) {
-		if mode == client.ModePassthrough {
-			s.Queue.Pause()
-		} else {
+		// If leaving passthrough, release the lock.
+		if mode != client.ModePassthrough && s.PassthroughOwner == cl {
+			s.PassthroughOwner = nil
 			s.Queue.Unpause()
 		}
+	}
+
+	// Passthrough locking callbacks.
+	cl.TryPassthrough = func() bool {
+		if s.PassthroughOwner != nil && s.PassthroughOwner != cl {
+			return false // locked by another client
+		}
+		s.PassthroughOwner = cl
+		s.Queue.Pause()
+		return true
+	}
+	cl.ReleasePassthrough = func() {
+		if s.PassthroughOwner == cl {
+			s.PassthroughOwner = nil
+			s.Queue.Unpause()
+		}
+	}
+	cl.TakePassthrough = func() {
+		prev := s.PassthroughOwner
+		if prev != nil && prev != cl {
+			// Kick the previous owner back to default mode.
+			prev.Mode = client.ModeDefault
+			prev.RenderBar()
+		}
+		s.PassthroughOwner = cl
+		s.Queue.Pause()
+	}
+	cl.IsPassthroughLocked = func() bool {
+		return s.PassthroughOwner != nil && s.PassthroughOwner != cl
 	}
 	cl.QueueStatus = func() (int, bool) {
 		return s.Queue.PendingCount(), s.Queue.IsPaused()

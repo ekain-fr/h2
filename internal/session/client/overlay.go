@@ -57,6 +57,12 @@ type Client struct {
 	// Child process lifecycle callbacks (set by Session).
 	OnRelaunch func() // called when user presses Enter after child exits
 	OnQuit     func() // called when user presses q after child exits or selects Quit from menu
+
+	// Passthrough locking callbacks (set by Session).
+	TryPassthrough     func() bool // attempt to acquire passthrough; returns false if locked
+	ReleasePassthrough func()      // release passthrough ownership
+	TakePassthrough    func()      // force-take passthrough from current owner
+	IsPassthroughLocked func() bool // returns true if another client owns passthrough
 }
 
 // InitClient initializes per-client state. Called by Session after creating

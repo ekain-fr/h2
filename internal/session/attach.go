@@ -71,6 +71,12 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	cl.OnDetach = nil
 	vt.Output.Write([]byte("\033[?1000l\033[?1006l"))
 
+	// Release passthrough ownership if this client held it.
+	if s.PassthroughOwner == cl {
+		s.PassthroughOwner = nil
+		s.Queue.Unpause()
+	}
+
 	// Remove this client from the session.
 	s.RemoveClient(cl)
 

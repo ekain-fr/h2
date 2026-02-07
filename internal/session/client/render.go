@@ -338,7 +338,12 @@ func (c *Client) StatusLabel() string {
 
 // MenuLabel returns the formatted menu display.
 func (c *Client) MenuLabel() string {
-	items := "Menu | Enter:passthrough | c:clear | r:redraw"
+	var items string
+	if c.IsPassthroughLocked != nil && c.IsPassthroughLocked() {
+		items = "Menu | Enter:LOCKED | t:take over | c:clear | r:redraw"
+	} else {
+		items = "Menu | Enter:passthrough | c:clear | r:redraw"
+	}
 	if c.OnDetach != nil {
 		items += " | d:detach"
 	}

@@ -2,10 +2,15 @@ package session
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
+	"github.com/vito/midterm"
+
+	"h2/internal/session/client"
 	"h2/internal/session/message"
+	"h2/internal/session/virtualterminal"
 )
 
 func TestStateTransitions_ActiveToIdle(t *testing.T) {
@@ -218,4 +223,196 @@ func TestStateString(t *testing.T) {
 			t.Errorf("State(%d).String() = %q, want %q", tt.state, got, tt.want)
 		}
 	}
+}
+
+// newTestSession creates a Session with a VT suitable for testing passthrough locking.
+func newTestSession() *Session {
+	s := New("test", "true", nil)
+	vt := &virtualterminal.VT{
+		Rows:      12,
+		Cols:      80,
+		ChildRows: 10,
+		Vt:        midterm.NewTerminal(10, 80),
+		Output:    io.Discard,
+	}
+	sb := midterm.NewTerminal(10, 80)
+	sb.AutoResizeY = true
+	sb.AppendOnly = true
+	vt.Scrollback = sb
+	s.VT = vt
+	return s
+}
+
+func TestPassthrough_TryAcquiresLock(t *testing.T) {
+	s := newTestSession()
+	cl := s.NewClient()
+
+	if !cl.TryPassthrough() {
+		t.Fatal("TryPassthrough should succeed when no owner")
+	}
+	if s.PassthroughOwner != cl {
+		t.Fatal("PassthroughOwner should be set to the client")
+	}
+	if !s.Queue.IsPaused() {
+		t.Fatal("queue should be paused after acquiring passthrough")
+	}
+}
+
+func TestPassthrough_TryFailsWhenLocked(t *testing.T) {
+	s := newTestSession()
+	cl1 := s.NewClient()
+	cl2 := s.NewClient()
+
+	cl1.TryPassthrough()
+
+	if cl2.TryPassthrough() {
+		t.Fatal("TryPassthrough should fail when another client owns it")
+	}
+	if s.PassthroughOwner != cl1 {
+		t.Fatal("PassthroughOwner should still be cl1")
+	}
+}
+
+func TestPassthrough_TrySameClientSucceeds(t *testing.T) {
+	s := newTestSession()
+	cl := s.NewClient()
+
+	cl.TryPassthrough()
+	if !cl.TryPassthrough() {
+		t.Fatal("TryPassthrough should succeed when same client already owns it")
+	}
+}
+
+func TestPassthrough_ReleaseClears(t *testing.T) {
+	s := newTestSession()
+	cl := s.NewClient()
+
+	cl.TryPassthrough()
+	cl.ReleasePassthrough()
+
+	if s.PassthroughOwner != nil {
+		t.Fatal("PassthroughOwner should be nil after release")
+	}
+	if s.Queue.IsPaused() {
+		t.Fatal("queue should be unpaused after release")
+	}
+}
+
+func TestPassthrough_ReleaseNoopIfNotOwner(t *testing.T) {
+	s := newTestSession()
+	cl1 := s.NewClient()
+	cl2 := s.NewClient()
+
+	cl1.TryPassthrough()
+	cl2.ReleasePassthrough() // cl2 is not owner — should be a no-op
+
+	if s.PassthroughOwner != cl1 {
+		t.Fatal("PassthroughOwner should still be cl1")
+	}
+	if !s.Queue.IsPaused() {
+		t.Fatal("queue should still be paused")
+	}
+}
+
+func TestPassthrough_TakeOverKicksPrevOwner(t *testing.T) {
+	s := newTestSession()
+	cl1 := s.NewClient()
+	cl2 := s.NewClient()
+
+	cl1.TryPassthrough()
+	cl1.Mode = client.ModePassthrough
+
+	cl2.TakePassthrough()
+
+	if s.PassthroughOwner != cl2 {
+		t.Fatal("PassthroughOwner should be cl2 after take-over")
+	}
+	if cl1.Mode != client.ModeDefault {
+		t.Fatalf("cl1 should be kicked to ModeDefault, got %v", cl1.Mode)
+	}
+	if !s.Queue.IsPaused() {
+		t.Fatal("queue should still be paused")
+	}
+}
+
+func TestPassthrough_IsLockedReportsCorrectly(t *testing.T) {
+	s := newTestSession()
+	cl1 := s.NewClient()
+	cl2 := s.NewClient()
+
+	if cl1.IsPassthroughLocked() {
+		t.Fatal("should not be locked when no owner")
+	}
+
+	cl1.TryPassthrough()
+
+	if cl1.IsPassthroughLocked() {
+		t.Fatal("should not report locked for the owner")
+	}
+	if !cl2.IsPassthroughLocked() {
+		t.Fatal("should report locked for non-owner")
+	}
+
+	cl1.ReleasePassthrough()
+	if cl2.IsPassthroughLocked() {
+		t.Fatal("should not be locked after release")
+	}
+}
+
+func TestPassthrough_ModeChangeReleasesLock(t *testing.T) {
+	s := newTestSession()
+	cl := s.NewClient()
+
+	cl.TryPassthrough()
+	cl.Mode = client.ModePassthrough
+
+	// Simulate leaving passthrough by triggering OnModeChange.
+	cl.OnModeChange(client.ModeDefault)
+
+	if s.PassthroughOwner != nil {
+		t.Fatal("PassthroughOwner should be nil after mode change away from passthrough")
+	}
+	if s.Queue.IsPaused() {
+		t.Fatal("queue should be unpaused after leaving passthrough")
+	}
+}
+
+func TestPassthrough_MenuLabelShowsLocked(t *testing.T) {
+	s := newTestSession()
+	cl1 := s.NewClient()
+	cl2 := s.NewClient()
+
+	cl1.TryPassthrough()
+
+	label := cl2.MenuLabel()
+	if !contains(label, "LOCKED") {
+		t.Fatalf("expected menu label to contain 'LOCKED', got %q", label)
+	}
+	if !contains(label, "t:take over") {
+		t.Fatalf("expected menu label to contain 't:take over', got %q", label)
+	}
+}
+
+func TestPassthrough_MenuLabelShowsPassthrough(t *testing.T) {
+	s := newTestSession()
+	cl := s.NewClient()
+	_ = s // ensure callbacks are wired
+
+	label := cl.MenuLabel()
+	if !contains(label, "Enter:passthrough") {
+		t.Fatalf("expected menu label to contain 'Enter:passthrough', got %q", label)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && containsSubstring(s, sub)
+}
+
+func containsSubstring(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
