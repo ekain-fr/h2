@@ -13,21 +13,21 @@ import (
 	"time"
 )
 
-// Agent wraps the OTEL collector, agent helper, and metrics for a session.
+// Agent wraps the OTEL collector, agent type, and metrics for a session.
 type Agent struct {
-	helper      AgentHelper
-	metrics     *OtelMetrics
-	listener    net.Listener
-	server      *http.Server
-	port        int
-	otelNotify  chan struct{} // buffered(1), signaled on OTEL event
-	stopCh      chan struct{}
+	agentType  AgentType
+	metrics    *OtelMetrics
+	listener   net.Listener
+	server     *http.Server
+	port       int
+	otelNotify chan struct{} // buffered(1), signaled on OTEL event
+	stopCh     chan struct{}
 }
 
-// New creates a new Agent with the given helper.
-func New(helper AgentHelper) *Agent {
+// New creates a new Agent with the given agent type.
+func New(agentType AgentType) *Agent {
 	return &Agent{
-		helper:     helper,
+		agentType:  agentType,
 		metrics:    &OtelMetrics{},
 		otelNotify: make(chan struct{}, 1),
 		stopCh:     make(chan struct{}),
@@ -39,9 +39,18 @@ func (a *Agent) OtelNotify() <-chan struct{} {
 	return a.otelNotify
 }
 
-// SetHelper sets the agent-specific helper.
-func (a *Agent) SetHelper(helper AgentHelper) {
-	a.helper = helper
+// AgentType returns the agent type.
+func (a *Agent) AgentType() AgentType {
+	return a.agentType
+}
+
+// PrependArgs returns extra args to inject before the user's args,
+// delegating to the agent type.
+func (a *Agent) PrependArgs(sessionID string) []string {
+	if a.agentType == nil {
+		return nil
+	}
+	return a.agentType.PrependArgs(sessionID)
 }
 
 // Metrics returns a snapshot of the current OTEL metrics.
@@ -94,8 +103,8 @@ func (a *Agent) StartOtelCollector() error {
 	a.port = ln.Addr().(*net.TCPAddr).Port
 
 	otelDebugLog("OTEL collector started on port %d", a.port)
-	if a.helper != nil {
-		env := a.helper.OtelEnv(a.port)
+	if a.agentType != nil {
+		env := a.agentType.ChildEnv(&CollectorPorts{OtelPort: a.port})
 		for k, v := range env {
 			otelDebugLog("  env: %s=%s", k, v)
 		}
@@ -133,13 +142,13 @@ func (a *Agent) OtelPort() int {
 	return a.port
 }
 
-// OtelEnv returns environment variables to inject into the child process
-// for OTEL telemetry export. Delegates to the agent helper.
-func (a *Agent) OtelEnv() map[string]string {
-	if a.helper == nil {
+// ChildEnv returns environment variables to inject into the child process.
+// Delegates to the agent type, passing collector connection info.
+func (a *Agent) ChildEnv() map[string]string {
+	if a.agentType == nil {
 		return nil
 	}
-	return a.helper.OtelEnv(a.port)
+	return a.agentType.ChildEnv(&CollectorPorts{OtelPort: a.port})
 }
 
 // Stop cleans up the agent resources.
@@ -177,9 +186,9 @@ func (a *Agent) processLogs(payload OtelLogsPayload) {
 						a.metrics.NoteEvent()
 					}
 
-					// Parse metrics if we have an agent helper with a parser
-					if a.helper != nil && a.metrics != nil {
-						if parser := a.helper.OtelParser(); parser != nil {
+					// Parse metrics if we have an agent type with a parser
+					if a.agentType != nil && a.metrics != nil {
+						if parser := a.agentType.OtelParser(); parser != nil {
 							if delta := parser.ParseLogRecord(lr); delta != nil {
 								otelDebugLog("  -> tokens: in=%d out=%d cost=%.4f", delta.InputTokens, delta.OutputTokens, delta.CostUSD)
 								a.metrics.Update(*delta)

@@ -10,7 +10,7 @@ import (
 )
 
 func TestOtelCollector_StartsOnRandomPort(t *testing.T) {
-	s := New("test", "true", nil)
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	err := s.StartOtelCollector()
@@ -27,12 +27,12 @@ func TestOtelCollector_StartsOnRandomPort(t *testing.T) {
 	}
 }
 
-func TestOtelEnv_ReturnsCorrectVars(t *testing.T) {
-	s := New("test", "true", nil)
+func TestChildEnv_ReturnsCorrectVars(t *testing.T) {
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	// Before starting collector, should return nil.
-	env := s.OtelEnv()
+	env := s.ChildEnv()
 	if env != nil {
 		t.Fatal("expected nil env before collector started")
 	}
@@ -42,7 +42,7 @@ func TestOtelEnv_ReturnsCorrectVars(t *testing.T) {
 		t.Fatalf("StartOtelCollector failed: %v", err)
 	}
 
-	env = s.OtelEnv()
+	env = s.ChildEnv()
 	if env == nil {
 		t.Fatal("expected non-nil env after collector started")
 	}
@@ -72,7 +72,7 @@ func TestOtelEnv_ReturnsCorrectVars(t *testing.T) {
 }
 
 func TestOtelCollector_AcceptsLogsAndSignalsActivity(t *testing.T) {
-	s := New("test", "true", nil)
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	err := s.StartOtelCollector()
@@ -96,7 +96,7 @@ func TestOtelCollector_AcceptsLogsAndSignalsActivity(t *testing.T) {
 		}]
 	}`
 
-	url := s.OtelEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
+	url := s.ChildEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
 	resp, err := http.Post(url, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /v1/logs failed: %v", err)
@@ -117,7 +117,7 @@ func TestOtelCollector_AcceptsLogsAndSignalsActivity(t *testing.T) {
 }
 
 func TestOtelCollector_AcceptsMetrics(t *testing.T) {
-	s := New("test", "true", nil)
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	err := s.StartOtelCollector()
@@ -131,7 +131,7 @@ func TestOtelCollector_AcceptsMetrics(t *testing.T) {
 	// Send a metrics payload (we just accept and discard).
 	payload := `{"resourceMetrics": []}`
 
-	url := s.OtelEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/metrics"
+	url := s.ChildEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/metrics"
 	resp, err := http.Post(url, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /v1/metrics failed: %v", err)
@@ -144,7 +144,7 @@ func TestOtelCollector_AcceptsMetrics(t *testing.T) {
 }
 
 func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
-	s := New("test", "true", nil)
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	err := s.StartOtelCollector()
@@ -174,7 +174,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 		}]
 	}`
 
-	url := s.OtelEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
+	url := s.ChildEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
 	resp, err := http.Post(url, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /v1/logs failed: %v", err)
@@ -190,7 +190,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 }
 
 func TestOtelMetrics_AccumulatesTokensAndCost(t *testing.T) {
-	s := New("test", "true", nil)
+	s := New("test", "claude", nil)
 	defer s.Stop()
 
 	err := s.StartOtelCollector()
@@ -223,7 +223,7 @@ func TestOtelMetrics_AccumulatesTokensAndCost(t *testing.T) {
 		}]
 	}`
 
-	url := s.OtelEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
+	url := s.ChildEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
 	resp, err := http.Post(url, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /v1/logs failed: %v", err)

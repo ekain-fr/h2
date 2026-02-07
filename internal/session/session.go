@@ -87,13 +87,14 @@ type Session struct {
 
 // New creates a new Session with the given name and command.
 func New(name string, command string, args []string) *Session {
+	agentType := agent.ResolveAgentType(command)
 	return &Session{
 		Name:           name,
 		Command:        command,
 		Args:           args,
 		AgentName:      name,
 		Queue:          message.NewMessageQueue(),
-		Agent:          agent.New(agent.NewClaudeCodeHelper()),
+		Agent:          agent.New(agentType),
 		state:          StateActive,
 		stateChangedAt: time.Now(),
 		stateCh:        make(chan struct{}),
@@ -140,12 +141,14 @@ func (s *Session) initVT(rows, cols int) {
 	s.VT.Cols = cols
 }
 
-// childArgs returns the command args, prepending --session-id for claude commands.
+// childArgs returns the command args, prepending any agent-type-specific args
+// (e.g. --session-id for Claude Code).
 func (s *Session) childArgs() []string {
-	if s.Command == "claude" && s.SessionID != "" {
-		return append([]string{"--session-id", s.SessionID}, s.Args...)
+	prepend := s.Agent.PrependArgs(s.SessionID)
+	if len(prepend) == 0 {
+		return s.Args
 	}
-	return s.Args
+	return append(prepend, s.Args...)
 }
 
 // NewClient creates a new Client with all session callbacks wired.
@@ -297,7 +300,7 @@ func (s *Session) RunDaemon() error {
 	if err := s.Agent.StartOtelCollector(); err != nil {
 		return fmt.Errorf("start otel collector: %w", err)
 	}
-	s.ExtraEnv = s.Agent.OtelEnv()
+	s.ExtraEnv = s.Agent.ChildEnv()
 	if s.ExtraEnv == nil {
 		s.ExtraEnv = make(map[string]string)
 	}
@@ -373,7 +376,7 @@ func (s *Session) RunInteractive() error {
 	if err := s.Agent.StartOtelCollector(); err != nil {
 		return fmt.Errorf("start otel collector: %w", err)
 	}
-	s.ExtraEnv = s.Agent.OtelEnv()
+	s.ExtraEnv = s.Agent.ChildEnv()
 	if s.ExtraEnv == nil {
 		s.ExtraEnv = make(map[string]string)
 	}
@@ -507,9 +510,9 @@ func (s *Session) OtelPort() int {
 	return s.Agent.OtelPort()
 }
 
-// OtelEnv delegates to the Agent.
-func (s *Session) OtelEnv() map[string]string {
-	return s.Agent.OtelEnv()
+// ChildEnv delegates to the Agent.
+func (s *Session) ChildEnv() map[string]string {
+	return s.Agent.ChildEnv()
 }
 
 // Metrics delegates to the Agent.
