@@ -66,9 +66,19 @@ instructions: |
   You have access to the full codebase for reference.
   Use h2 send to communicate with other agents.
 
-# Permission rules for automated permission handling
+# Permission reviewer instructions — used by h2 permission-request
+# when claude --print is called to review uncertain permission requests.
+# This gives role-specific context to the AI reviewer.
+permission_reviewer: |
+  You are reviewing permission requests for an architect agent.
+  This agent designs systems and writes documentation.
+  ALLOW: read-only tools, standard dev commands, writing to docs/
+  DENY: destructive operations, system modifications, force pushes
+  ASK_USER: anything modifying source code, publishing, or secrets
+
+# Permission rules — go into Claude Code's settings.json for native enforcement
 permissions:
-  # Always allow these tools/patterns
+  # Always allow these tools/patterns (enforced by Claude Code itself)
   allow:
     - "Read"
     - "Glob"
@@ -78,12 +88,12 @@ permissions:
     - "Write(docs/**)"
     - "Edit(docs/**)"
 
-  # Always deny these
+  # Always deny these (enforced by Claude Code itself)
   deny:
     - "Bash(rm -rf *)"
     - "Bash(sudo *)"
 
-  # Everything else: ask user (via attach)
+  # Everything not matched: goes to AI reviewer, then falls through to user
 
 # Additional Claude Code settings (merged into settings.json)
 settings:
@@ -98,6 +108,11 @@ name: coder
 instructions: |
   You are a coding agent. Implement features as requested.
   Write tests for all changes. Run make test before committing.
+permission_reviewer: |
+  You are reviewing permissions for a coding agent.
+  ALLOW: all standard dev tools (read, write, edit, bash, grep, glob)
+  DENY: destructive ops (rm -rf, sudo, force push)
+  ASK_USER: anything unusual
 permissions:
   allow:
     - "Read"
@@ -133,12 +148,16 @@ When `h2 run --role architect --name arch-1` launches, h2 creates:
 ├── .claude/
 │   ├── CLAUDE.md          # Generated from role instructions
 │   └── settings.json      # Generated from role permissions + hooks + settings
-└── workspace -> /path/to/project   # Symlink to working directory
+└── permission-reviewer.md # Instructions for AI permission reviewer
 ```
 
 The agent's Claude Code instance is launched with its config directory pointing
 at `~/.h2/sessions/<name>/.claude/`. This isolates each agent's config while
 letting h2 control the full setup.
+
+The `permission-reviewer.md` file lives at the session root (not inside
+`.claude/`) because it's consumed by `h2 permission-request`, not by Claude
+Code itself.
 
 ### Generated settings.json
 
@@ -198,31 +217,50 @@ but has limitations:
 - h2 doesn't know when an agent is blocked on permission
 - The script is fragile (bash parsing, temp files, error handling)
 
+### Two-layer permission model
+
+**Layer 1: Claude Code native enforcement.** The role's `permissions.allow`
+and `permissions.deny` lists go directly into settings.json. Claude Code
+enforces these itself — allowed tools proceed without any hook, denied tools
+are blocked before any hook fires. This is fast and deterministic.
+
+**Layer 2: AI reviewer via `h2 permission-request`.** For permission requests
+that aren't covered by the native allow/deny lists, Claude Code fires the
+PermissionRequest hook. `h2 permission-request` reads the role's
+`permission-reviewer.md` from the agent's session directory and passes it
+to `claude --print --model haiku` along with the tool request details.
+
 ### Proposed: `h2 permission-request`
 
-A new h2 command that handles permission requests as a first-class feature:
+A new h2 command that handles the AI reviewer layer:
 
 ```
 h2 permission-request [--agent <name>]
 ```
 
+- Defaults `--agent` to `$H2_ACTOR` (same pattern as `h2 hook collect`)
 - Registered as a PermissionRequest hook in every role's generated settings.json
-- Reads the permission request JSON from stdin (same as any hook)
-- Checks the agent's role permission rules (allow/deny lists)
-- For uncertain cases, uses `claude --print --model haiku` for review (same
-  approach as the current script, but with role-specific context)
+- Reads the permission request JSON from stdin
+- Looks up the agent's session directory (`~/.h2/sessions/<agent>/`)
+- Reads `permission-reviewer.md` for role-specific reviewer instructions
+- Calls `claude --print --model haiku` with the reviewer instructions + request
 - Returns the decision on stdout in Claude Code's hook format
 - Reports "blocked" state to h2 when escalating to user
 
 ### Permission decision flow
 
 ```
-Claude Code fires PermissionRequest hook
+Claude Code encounters a permission-requiring action
+  → Layer 1: checks settings.json allow/deny lists
+  → if allow list match: proceed (no hook fired)
+  → if deny list match: blocked (no hook fired)
+  → if neither: fire PermissionRequest hook
+
+PermissionRequest hook fires
   → h2 permission-request reads stdin JSON
   → extracts tool_name, tool_input
-  → checks role's allow list → if match: return {"decision": "allow"}
-  → checks role's deny list  → if match: return {"decision": "deny", "reason": "..."}
-  → calls claude --print --model haiku with role context for review
+  → reads ~/.h2/sessions/<agent>/permission-reviewer.md
+  → calls claude --print --model haiku with reviewer instructions + request
   → if ALLOW: return {"decision": "allow"}
   → if DENY:  return {"decision": "deny", "reason": "..."}
   → if ASK_USER:
@@ -251,8 +289,8 @@ Clear on any subsequent event (UserPromptSubmit, PreToolUse, Stop, etc.).
 
 ### Permission rule format
 
-Permission rules in the role file use the same glob syntax as Claude Code's
-settings.json permissions:
+Permission rules in the role file use Claude Code's native permission syntax
+and are copied directly into settings.json. Claude Code enforces these itself:
 
 ```yaml
 permissions:
@@ -268,8 +306,8 @@ permissions:
     - "Bash(git push --force *)"
 ```
 
-Rules are checked in order: allow first, then deny. If neither matches,
-the request goes to the AI reviewer (claude --print), which can return
+Anything not matched by allow or deny triggers the PermissionRequest hook,
+where the AI reviewer (with `permission_reviewer` instructions) decides
 ALLOW, DENY, or ASK_USER.
 
 ## Launch Flow
@@ -281,15 +319,17 @@ h2 run --role architect --name arch-1
   → create ~/.h2/sessions/arch-1/
   → generate .claude/CLAUDE.md from role instructions
   → generate .claude/settings.json from role (permissions + hooks + settings)
+  → write permission-reviewer.md from role permission_reviewer instructions
   → generate session UUID
-  → ForkDaemon(name, sessionID, "claude", ["--append-system-prompt", "<role context>"])
+  → ForkDaemon(name, sessionID, "claude", args)
     → daemon sets ExtraEnv with:
         H2_ACTOR=arch-1
         H2_ROLE=architect
+        H2_SESSION_DIR=~/.h2/sessions/arch-1
         CLAUDE_CONFIG_DIR=~/.h2/sessions/arch-1/.claude
         (+ OTEL env vars from collector)
     → starts claude with --session-id <uuid>
-    → claude reads CLAUDE.md and settings.json from the session dir
+    → claude reads CLAUDE.md and settings.json from the config dir
 ```
 
 ### `--role` flag on `h2 run`
@@ -358,7 +398,7 @@ echo '{"tool_name":"Bash","tool_input":{"command":"make test"}}' | h2 permission
 1. Define role YAML schema in `internal/config/role.go`
 2. Role loading: search `~/.h2/roles/`, parse YAML, validate
 3. Session directory creation: `~/.h2/sessions/<name>/`
-4. Config generation: role → CLAUDE.md + settings.json
+4. Config generation: role → CLAUDE.md + settings.json + permission-reviewer.md
 5. Update `h2 run` to accept `--role` flag
 6. Update `ForkDaemon` / `RunDaemon` to pass session dir config
 7. Add `h2 role list` and `h2 role show` commands
@@ -366,8 +406,8 @@ echo '{"tool_name":"Bash","tool_input":{"command":"make test"}}' | h2 permission
 ### Phase 2: Permission handling
 
 8. Create `h2 permission-request` command
-9. Permission rule matching (allow/deny patterns)
-10. AI reviewer fallback (claude --print --model haiku)
+9. Read permission-reviewer.md from session dir
+10. AI reviewer via `claude --print --model haiku` with reviewer instructions
 11. Hook event for "blocked on permission" state
 12. Update HookCollector with blocked state tracking
 13. Update AgentInfo / h2 list / status bar to show blocked state
@@ -406,13 +446,16 @@ echo '{"tool_name":"Bash","tool_input":{"command":"make test"}}' | h2 permission
    `~/.h2/sessions/<name>/`. This prevents agents from interfering with each
    other's settings and makes cleanup straightforward.
 
-3. **Permission handling in h2.** Moving from a standalone bash script to
-   `h2 permission-request` gives us: role-aware rules, blocked state tracking,
-   and a cleaner implementation (Go instead of bash/jq).
+3. **Two-layer permissions.** Claude Code natively enforces allow/deny rules
+   from settings.json (fast, deterministic). `h2 permission-request` handles
+   the AI reviewer layer with role-specific instructions from
+   `permission-reviewer.md`. This separates concerns cleanly: Claude Code
+   handles the rules it knows, h2 handles the judgment calls.
 
 4. **AI reviewer as fallback.** Rather than requiring exhaustive allow/deny
-   rules, uncertain requests go to a fast/cheap model (haiku) for review.
-   This is the current approach and works well in practice.
+   rules, uncertain requests go to a fast/cheap model (haiku) for review
+   with role-specific context. This is the current approach and works well
+   in practice.
 
 5. **User approves via attach.** When a permission escalates to ask_user,
    the user attaches to the agent's session to approve/deny through Claude
