@@ -66,17 +66,8 @@ instructions: |
   You have access to the full codebase for reference.
   Use h2 send to communicate with other agents.
 
-# Permission reviewer instructions — used by h2 permission-request
-# when claude --print is called to review uncertain permission requests.
-# This gives role-specific context to the AI reviewer.
-permission_reviewer_instructions: |
-  You are reviewing permission requests for an architect agent.
-  This agent designs systems and writes documentation.
-  ALLOW: read-only tools, standard dev commands, writing to docs/
-  DENY: destructive operations, system modifications, force pushes
-  ASK_USER: anything modifying source code, publishing, or secrets
-
-# Permission rules — go into Claude Code's settings.json for native enforcement
+# Permissions — allow/deny enforced natively by Claude Code,
+# agent section configures the AI reviewer for everything else.
 permissions:
   # Always allow these tools/patterns (enforced by Claude Code itself)
   allow:
@@ -93,7 +84,15 @@ permissions:
     - "Bash(rm -rf *)"
     - "Bash(sudo *)"
 
-  # Everything not matched: goes to AI reviewer, then falls through to user
+  # AI reviewer — handles requests not matched by allow/deny
+  agent:
+    enabled: true
+    instructions: |
+      You are reviewing permission requests for an architect agent.
+      This agent designs systems and writes documentation.
+      ALLOW: read-only tools, standard dev commands, writing to docs/
+      DENY: destructive operations, system modifications, force pushes
+      ASK_USER: anything modifying source code, publishing, or secrets
 
 # Additional Claude Code settings (merged into settings.json)
 settings:
@@ -108,11 +107,6 @@ name: coder
 instructions: |
   You are a coding agent. Implement features as requested.
   Write tests for all changes. Run make test before committing.
-permission_reviewer_instructions: |
-  You are reviewing permissions for a coding agent.
-  ALLOW: all standard dev tools (read, write, edit, bash, grep, glob)
-  DENY: destructive ops (rm -rf, sudo, force push)
-  ASK_USER: anything unusual
 permissions:
   allow:
     - "Read"
@@ -121,6 +115,12 @@ permissions:
     - "Bash"
     - "Write"
     - "Edit"
+  agent:
+    instructions: |
+      You are reviewing permissions for a coding agent.
+      ALLOW: all standard dev tools (read, write, edit, bash, grep, glob)
+      DENY: destructive ops (rm -rf, sudo, force push)
+      ASK_USER: anything unusual
 ```
 
 ### Role with custom hooks
@@ -166,6 +166,9 @@ h2 builds the settings.json by merging:
 2. Role's custom hooks → merged with h2 standard hooks
 3. Role's additional settings → any extra keys
 4. h2 standard hooks → always injected (hook collector, permission handler)
+
+If `permissions.agent` is enabled, h2 also writes `permission-reviewer.md`
+to the session directory from `permissions.agent.instructions`.
 
 ```json
 {
@@ -243,8 +246,10 @@ h2 permission-request [--agent <name>]
 - Reads the permission request JSON from stdin
 - Looks up the agent's session directory (`~/.h2/sessions/<agent>/`)
 - Reads `permission-reviewer.md` for role-specific reviewer instructions
-- Calls `claude --print --model haiku` with the reviewer instructions + request
-- Returns the decision on stdout in Claude Code's hook format
+- If `permissions.agent` is enabled: calls `claude --print --model haiku` with
+  the reviewer instructions + request, returns the decision
+- If `permissions.agent` is not enabled (or no reviewer instructions): returns
+  empty (falls through to Claude Code's built-in permission dialog)
 - Reports "blocked" state to h2 when escalating to user
 
 ### Permission decision flow
@@ -260,13 +265,20 @@ PermissionRequest hook fires
   → h2 permission-request reads stdin JSON
   → extracts tool_name, tool_input
   → reads ~/.h2/sessions/<agent>/permission-reviewer.md
-  → calls claude --print --model haiku with reviewer instructions + request
-  → if ALLOW: return {"decision": "allow"}
-  → if DENY:  return {"decision": "deny", "reason": "..."}
-  → if ASK_USER:
-      → sends hook_event to h2 with "blocked_permission" state
-      → returns empty (falls through to Claude Code's built-in permission dialog)
-      → user must h2 attach to approve/deny
+
+  If permissions.agent enabled (reviewer instructions exist):
+    → calls claude --print --model haiku with reviewer instructions + request
+    → if ALLOW: return {"decision": "allow"}
+    → if DENY:  return {"decision": "deny", "reason": "..."}
+    → if ASK_USER:
+        → sends hook_event to h2 with "blocked_permission" state
+        → returns empty (falls through to Claude Code's built-in permission dialog)
+        → user must h2 attach to approve/deny
+
+  If permissions.agent not enabled (no reviewer instructions):
+    → sends hook_event to h2 with "blocked_permission" state immediately
+    → returns empty (falls through to Claude Code's built-in permission dialog)
+    → user must h2 attach to approve/deny
 ```
 
 ### Blocked state
@@ -283,9 +295,24 @@ This shows up in `h2 list` and the status bar. The HookCollector already
 tracks the last event — we extend it to track "blocked on permission" as a
 specific condition that persists until the next non-PermissionRequest event.
 
+The status logic depends on whether `permissions.agent` is enabled:
+
+- **Agent enabled**: When h2 permission-request fires, the agent is
+  "processing permission" (not yet blocked on user). Only if the AI reviewer
+  returns ASK_USER does the agent become blocked. The hook_event with
+  "blocked_permission" state is sent at that point.
+
+- **Agent not enabled**: As soon as the PermissionRequest hook fires, the
+  agent is immediately blocked on the user. The hook_event with
+  "blocked_permission" state is sent right away.
+
+In both cases, the blocked state clears when the next PreToolUse event fires
+(the approved tool begins executing).
+
 Implementation: add a `blockedOnPermission bool` and `blockedToolName string`
-to HookCollector. Set when we see a PermissionRequest that escalates to user.
-Clear on any subsequent event (UserPromptSubmit, PreToolUse, Stop, etc.).
+to HookCollector. Set when we receive a "blocked_permission" hook_event from
+`h2 permission-request`. Clear on any subsequent PreToolUse, UserPromptSubmit,
+Stop, or other non-PermissionRequest event.
 
 ### Permission rule format
 
@@ -307,7 +334,7 @@ permissions:
 ```
 
 Anything not matched by allow or deny triggers the PermissionRequest hook,
-where the AI reviewer (with `permission_reviewer` instructions) decides
+where the AI reviewer (configured via `permissions.agent`) decides
 ALLOW, DENY, or ASK_USER.
 
 ## Launch Flow
@@ -319,7 +346,7 @@ h2 run --role architect --name arch-1
   → create ~/.h2/sessions/arch-1/
   → generate .claude/CLAUDE.md from role instructions
   → generate .claude/settings.json from role (permissions + hooks + settings)
-  → write permission-reviewer.md from role permission_reviewer instructions
+  → write permission-reviewer.md from role permissions.agent.instructions
   → generate session UUID
   → ForkDaemon(name, sessionID, "claude", args)
     → daemon sets ExtraEnv with:
@@ -379,6 +406,7 @@ Instructions:
 Permissions:
   Allow: Read, Glob, Grep, WebSearch, WebFetch, Write(docs/**), Edit(docs/**)
   Deny:  Bash(rm -rf *), Bash(sudo *)
+  Agent: enabled
 ```
 
 ### `h2 permission-request`
