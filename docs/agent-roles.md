@@ -69,7 +69,7 @@ instructions: |
 # Permission reviewer instructions — used by h2 permission-request
 # when claude --print is called to review uncertain permission requests.
 # This gives role-specific context to the AI reviewer.
-permission_reviewer: |
+permission_reviewer_instructions: |
   You are reviewing permission requests for an architect agent.
   This agent designs systems and writes documentation.
   ALLOW: read-only tools, standard dev commands, writing to docs/
@@ -108,7 +108,7 @@ name: coder
 instructions: |
   You are a coding agent. Implement features as requested.
   Write tests for all changes. Run make test before committing.
-permission_reviewer: |
+permission_reviewer_instructions: |
   You are reviewing permissions for a coding agent.
   ALLOW: all standard dev tools (read, write, edit, bash, grep, glob)
   DENY: destructive ops (rm -rf, sudo, force push)
