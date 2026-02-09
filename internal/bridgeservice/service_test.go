@@ -213,6 +213,59 @@ func TestHandleInbound_UnaddressedNoConciergeFirstAgent(t *testing.T) {
 	}
 }
 
+// --- Error reply tests ---
+
+func TestHandleInbound_DeadAgentRepliesWithError(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	sender := &mockSender{name: "telegram"}
+	svc := New([]bridge.Bridge{sender}, "concierge", tmpDir, "alice")
+
+	// No concierge agent socket exists — send should fail.
+	svc.handleInbound("", "hello?")
+
+	msgs := sender.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 error reply, got %d", len(msgs))
+	}
+	if msgs[0] != "concierge agent is not running, unable to deliver message." {
+		t.Errorf("unexpected reply: %q", msgs[0])
+	}
+}
+
+func TestHandleInbound_ExplicitDeadAgentRepliesWithError(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	sender := &mockSender{name: "telegram"}
+	svc := New([]bridge.Bridge{sender}, "", tmpDir, "alice")
+
+	// Explicitly target a non-existent agent.
+	svc.handleInbound("foo", "hello foo")
+
+	msgs := sender.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 error reply, got %d", len(msgs))
+	}
+	if msgs[0] != "foo agent is not running, unable to deliver message." {
+		t.Errorf("unexpected reply: %q", msgs[0])
+	}
+}
+
+func TestHandleInbound_NoAgentsRepliesWithError(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	sender := &mockSender{name: "telegram"}
+	svc := New([]bridge.Bridge{sender}, "", tmpDir, "alice") // no concierge
+
+	// No agents at all.
+	svc.handleInbound("", "anyone there?")
+
+	msgs := sender.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 error reply, got %d", len(msgs))
+	}
+	if msgs[0] != "No agents are running, unable to deliver message." {
+		t.Errorf("unexpected reply: %q", msgs[0])
+	}
+}
+
 // --- Outbound tests ---
 
 func TestHandleOutbound(t *testing.T) {

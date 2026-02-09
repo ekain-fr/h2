@@ -131,12 +131,26 @@ func (s *Service) handleInbound(targetAgent, body string) {
 		target = s.resolveDefaultTarget()
 	}
 	if target == "" {
-		log.Printf("bridge: no target agent for inbound message, dropping")
+		log.Printf("bridge: no target agent for inbound message, no agents available")
+		s.replyError("No agents are running, unable to deliver message.")
 		return
 	}
 	log.Printf("bridge: routing inbound to %s", target)
 	if err := s.sendToAgent(target, s.user, body); err != nil {
 		log.Printf("bridge: send to agent %s: %v", target, err)
+		s.replyError(fmt.Sprintf("%s agent is not running, unable to deliver message.", target))
+	}
+}
+
+// replyError sends an error message back to all Sender bridges.
+func (s *Service) replyError(msg string) {
+	ctx := context.Background()
+	for _, b := range s.bridges {
+		if sender, ok := b.(bridge.Sender); ok {
+			if err := sender.Send(ctx, msg); err != nil {
+				log.Printf("bridge: send error reply via %s: %v", b.Name(), err)
+			}
+		}
 	}
 }
 
