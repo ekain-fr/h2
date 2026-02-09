@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,13 +12,23 @@ import (
 
 // Role defines a named configuration bundle for an h2 agent.
 type Role struct {
-	Name         string      `yaml:"name"`
-	Description  string      `yaml:"description,omitempty"`
-	Model        string      `yaml:"model,omitempty"`
-	Instructions string      `yaml:"instructions"`
-	Permissions  Permissions `yaml:"permissions,omitempty"`
-	Hooks        yaml.Node   `yaml:"hooks,omitempty"`   // passed through as-is to settings.json
-	Settings     yaml.Node   `yaml:"settings,omitempty"` // extra settings.json keys
+	Name            string      `yaml:"name"`
+	Description     string      `yaml:"description,omitempty"`
+	AgentType       string      `yaml:"agent_type,omitempty"` // "claude" (default), future: other agent types
+	Model           string      `yaml:"model,omitempty"`
+	ClaudeConfigDir string      `yaml:"claude_config_dir,omitempty"`
+	Instructions    string      `yaml:"instructions"`
+	Permissions     Permissions `yaml:"permissions,omitempty"`
+	Hooks           yaml.Node   `yaml:"hooks,omitempty"`   // passed through as-is to settings.json
+	Settings        yaml.Node   `yaml:"settings,omitempty"` // extra settings.json keys
+}
+
+// GetAgentType returns the agent type for this role, defaulting to "claude".
+func (r *Role) GetAgentType() string {
+	if r.AgentType != "" {
+		return r.AgentType
+	}
+	return "claude"
 }
 
 // Permissions defines the permission configuration for a role.
@@ -45,6 +56,71 @@ func (pa *PermissionAgent) IsEnabled() bool {
 // RolesDir returns the directory where role files are stored (~/.h2/roles/).
 func RolesDir() string {
 	return filepath.Join(ConfigDir(), "roles")
+}
+
+// DefaultClaudeConfigDir returns the default shared Claude config directory.
+func DefaultClaudeConfigDir() string {
+	return filepath.Join(ConfigDir(), "claude-config", "default")
+}
+
+// GetClaudeConfigDir returns the Claude config directory for this role.
+// If not specified in the role, returns the default shared config dir.
+// If set to "~/" (the home directory), returns "" to indicate that
+// CLAUDE_CONFIG_DIR should not be overridden (use system default).
+func (r *Role) GetClaudeConfigDir() string {
+	if r.ClaudeConfigDir != "" {
+		// Expand ~ to home directory if present.
+		if strings.HasPrefix(r.ClaudeConfigDir, "~/") {
+			rest := r.ClaudeConfigDir[2:]
+			if rest == "" {
+				// "~/" means use system default — don't override CLAUDE_CONFIG_DIR.
+				return ""
+			}
+			home, err := os.UserHomeDir()
+			if err == nil {
+				return filepath.Join(home, rest)
+			}
+		}
+		return r.ClaudeConfigDir
+	}
+	return DefaultClaudeConfigDir()
+}
+
+// IsClaudeConfigAuthenticated checks if the given Claude config directory
+// has been authenticated (i.e., has a valid .claude.json with oauthAccount).
+func IsClaudeConfigAuthenticated(configDir string) (bool, error) {
+	claudeJSON := filepath.Join(configDir, ".claude.json")
+
+	// Check if .claude.json exists
+	data, err := os.ReadFile(claudeJSON)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read .claude.json: %w", err)
+	}
+
+	// Parse and check for oauthAccount field
+	var config struct {
+		OAuthAccount *struct {
+			AccountUUID  string `json:"accountUuid"`
+			EmailAddress string `json:"emailAddress"`
+		} `json:"oauthAccount"`
+	}
+
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false, fmt.Errorf("parse .claude.json: %w", err)
+	}
+
+	// Consider authenticated if oauthAccount exists and has required fields
+	return config.OAuthAccount != nil &&
+		config.OAuthAccount.AccountUUID != "" &&
+		config.OAuthAccount.EmailAddress != "", nil
+}
+
+// IsRoleAuthenticated checks if the role's Claude config directory is authenticated.
+func (r *Role) IsRoleAuthenticated() (bool, error) {
+	return IsClaudeConfigAuthenticated(r.GetClaudeConfigDir())
 }
 
 // LoadRole loads a role by name from ~/.h2/roles/<name>.yaml.

@@ -21,11 +21,12 @@ type Daemon struct {
 
 // RunDaemon creates a Session and Daemon, sets up the socket, and runs
 // the session in daemon mode. This is the main entry point for the _daemon command.
-func RunDaemon(name, sessionID, command string, args []string, roleName, sessionDir string) error {
+func RunDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string) error {
 	s := New(name, command, args)
 	s.SessionID = sessionID
 	s.RoleName = roleName
 	s.SessionDir = sessionDir
+	s.ClaudeConfigDir = claudeConfigDir
 	s.StartTime = time.Now()
 
 	// Create socket directory.
@@ -105,7 +106,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 
 // ForkDaemon starts a daemon in a background process by re-execing with
 // the hidden _daemon subcommand.
-func ForkDaemon(name, sessionID, command string, args []string, roleName, sessionDir string) error {
+func ForkDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
@@ -117,6 +118,9 @@ func ForkDaemon(name, sessionID, command string, args []string, roleName, sessio
 	}
 	if sessionDir != "" {
 		daemonArgs = append(daemonArgs, "--session-dir", sessionDir)
+	}
+	if claudeConfigDir != "" {
+		daemonArgs = append(daemonArgs, "--claude-config-dir", claudeConfigDir)
 	}
 	daemonArgs = append(daemonArgs, "--")
 	daemonArgs = append(daemonArgs, command)

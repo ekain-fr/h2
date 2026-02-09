@@ -15,24 +15,59 @@ func newRunCmd() *cobra.Command {
 	var name string
 	var detach bool
 	var roleName string
+	var agentType string
+	var command string
 
 	cmd := &cobra.Command{
-		Use:   "run [--name=<name>] [--role=<role>] [--detach] [-- <command> [args...]]",
+		Use:   "run [flags]",
 		Short: "Start a new agent",
-		Long: `Fork a daemon process running the given command, then attach to it.
+		Long: `Start a new agent, optionally configured from a role.
 
-If --role is specified, the agent is configured from ~/.h2/roles/<role>.yaml
-and the command defaults to 'claude'. If --name is omitted, it defaults to
-the role name.`,
+By default, uses the "default" role from ~/.h2/roles/default.yaml.
+
+  h2 run                        Use the default role
+  h2 run --role concierge       Use a specific role
+  h2 run --agent-type claude    Run an agent type without a role
+  h2 run --command "vim"        Run an explicit command`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var command string
+			var cmdCommand string
 			var cmdArgs []string
 			var sessionDir string
+			var claudeConfigDir string
 
-			if roleName != "" {
-				// Load role and set up session directory.
+			// Check mutual exclusivity of mode flags.
+			modeFlags := 0
+			if cmd.Flags().Changed("role") {
+				modeFlags++
+			}
+			if cmd.Flags().Changed("agent-type") {
+				modeFlags++
+			}
+			if cmd.Flags().Changed("command") {
+				modeFlags++
+			}
+			if modeFlags > 1 {
+				return fmt.Errorf("--role, --agent-type, and --command are mutually exclusive")
+			}
+
+			if cmd.Flags().Changed("agent-type") {
+				// Run agent type without a role.
+				cmdCommand = agentType
+			} else if cmd.Flags().Changed("command") {
+				// Run explicit command without a role.
+				cmdCommand = command
+				cmdArgs = args
+			} else {
+				// Use a role (specified or default).
+				if roleName == "" {
+					roleName = "default"
+				}
+
 				role, err := config.LoadRole(roleName)
 				if err != nil {
+					if roleName == "default" {
+						return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
+					}
 					return fmt.Errorf("load role %q: %w", roleName, err)
 				}
 
@@ -46,20 +81,15 @@ the role name.`,
 				}
 				sessionDir = dir
 
-				// Default command to claude when using a role.
-				if len(args) > 0 {
-					command = args[0]
-					cmdArgs = args[1:]
-				} else {
-					command = "claude"
+				// Get the Claude config dir and ensure it exists with h2 hooks.
+				claudeConfigDir = role.GetClaudeConfigDir()
+				if claudeConfigDir != "" {
+					if err := config.EnsureClaudeConfigDir(claudeConfigDir); err != nil {
+						return fmt.Errorf("ensure claude config dir: %w", err)
+					}
 				}
-			} else {
-				// No role — require command args.
-				if len(args) == 0 {
-					return fmt.Errorf("command is required (or use --role)")
-				}
-				command = args[0]
-				cmdArgs = args[1:]
+
+				cmdCommand = role.GetAgentType()
 			}
 
 			if name == "" {
@@ -69,7 +99,7 @@ the role name.`,
 			sessionID := uuid.New().String()
 
 			// Fork a daemon process.
-			if err := session.ForkDaemon(name, sessionID, command, cmdArgs, roleName, sessionDir); err != nil {
+			if err := session.ForkDaemon(name, sessionID, cmdCommand, cmdArgs, roleName, sessionDir, claudeConfigDir); err != nil {
 				return err
 			}
 
@@ -85,7 +115,9 @@ the role name.`,
 
 	cmd.Flags().StringVar(&name, "name", "", "Agent name (auto-generated if omitted)")
 	cmd.Flags().BoolVar(&detach, "detach", false, "Don't auto-attach after starting")
-	cmd.Flags().StringVar(&roleName, "role", "", "Role to use from ~/.h2/roles/")
+	cmd.Flags().StringVar(&roleName, "role", "", "Role to use (defaults to 'default')")
+	cmd.Flags().StringVar(&agentType, "agent-type", "", "Agent type to run without a role (e.g. claude)")
+	cmd.Flags().StringVar(&command, "command", "", "Explicit command to run without a role")
 
 	return cmd
 }

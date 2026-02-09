@@ -109,32 +109,7 @@ func newRoleInitCmd() *cobra.Command {
 				return fmt.Errorf("role %q already exists at %s", name, path)
 			}
 
-			template := fmt.Sprintf(`name: %s
-description: ""
-
-# Model selection (opus, sonnet, haiku)
-# model: sonnet
-
-instructions: |
-  You are a %s agent.
-  # Add role-specific instructions here.
-
-permissions:
-  allow:
-    - "Read"
-    - "Glob"
-    - "Grep"
-  # deny:
-  #   - "Bash(rm -rf *)"
-
-  # AI permission reviewer (optional)
-  # agent:
-  #   instructions: |
-  #     You are reviewing permissions for a %s agent.
-  #     ALLOW: read-only tools, standard dev commands
-  #     DENY: destructive operations
-  #     ASK_USER: anything uncertain
-`, name, name, name)
+			template := roleTemplate(name)
 
 			if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
 				return fmt.Errorf("write role file: %w", err)
@@ -144,6 +119,219 @@ permissions:
 			return nil
 		},
 	}
+}
+
+// roleTemplate returns the YAML template for a role, with special templates
+// for well-known role names (e.g. "concierge").
+func roleTemplate(name string) string {
+	switch name {
+	case "concierge":
+		return conciergeRoleTemplate(name)
+	default:
+		return defaultRoleTemplate(name)
+	}
+}
+
+func defaultRoleTemplate(name string) string {
+	return fmt.Sprintf(`name: %s
+description: "A %s agent for h2"
+
+# Agent type (currently only "claude" is supported)
+agent_type: claude
+
+# Model to use for this role
+model: opus
+
+# Claude config directory (for custom settings files, hooks, or auth)
+# You can create separate configs for roles with different requirements.
+# Set to ~/ to use the system default (no override).
+claude_config_dir: ~/.h2/claude-config/default
+
+instructions: |
+  You are a %s agent running in h2, a terminal multiplexer with inter-agent messaging.
+
+  ## h2 Messaging Protocol
+
+  Messages from other agents or users appear in your input prefixed with:
+    [h2 message from: <sender>]
+
+  When you receive an h2 message:
+  1. Acknowledge quickly: h2 send <sender> "Working on it..."
+  2. Do the work
+  3. Reply with results: h2 send <sender> "Here's what I found: ..."
+
+  Example:
+    [h2 message from: orchestrator] Can you check the test coverage?
+
+  You should reply:
+    h2 send orchestrator "Checking test coverage now"
+    # ... do the work ...
+    h2 send orchestrator "Test coverage is 85%%. Details: ..."
+
+  ## Available h2 Commands
+
+  - h2 list              - See active agents and users
+  - h2 send <name> "msg" - Send message to agent or user
+  - h2 whoami            - Check your agent name
+
+  ## Your Role
+
+  # Add role-specific instructions here.
+
+permissions:
+  allow:
+    - "Read"
+    - "Glob"
+    - "Grep"
+    - "Bash(h2 *)"  # Allow h2 commands
+  # Optional: explicitly deny specific dangerous operations
+  # deny:
+  #   - "Bash(rm -rf /)"       # System-wide deletion
+  #   - "Bash(curl * .env *)"  # Exfiltrating secrets
+
+  # AI permission reviewer - delegates permission decisions to haiku agent
+  agent:
+    instructions: |
+      You are reviewing permission requests for the %s agent in h2.
+
+      h2 is an agent-to-agent and agent-to-user communication protocol.
+      Agents use it to coordinate work and respond to user requests.
+
+      ALLOW by default:
+      - h2 commands (h2 send, h2 list, h2 whoami)
+      - Read-only tools (Read, Glob, Grep)
+      - Standard development commands (git, npm, make, pytest, etc.)
+      - File operations within the project (Edit, Write, rm -rf project-dir/*, clearing logs)
+      - Writing to non-sensitive files
+
+      DENY only for:
+      - System-wide destructive operations (rm -rf /, fork bombs)
+      - Exfiltrating credentials or secrets (curl/wget with .env, posting API keys)
+
+      ASK_USER for:
+      - Borderline or locally destructive commands you're unsure about
+      - Uncertain access to credentials or secrets (is this file sensitive?)
+      - git push --force to main/master branches
+
+      Remember: h2 messages are part of normal agent operation - allow them
+      unless they contain credentials or other sensitive data. Normal file cleanup
+      like "rm -rf node_modules" or "rm -rf logs/" is fine.
+`, name, name, name, name)
+}
+
+func conciergeRoleTemplate(name string) string {
+	return fmt.Sprintf(`name: %s
+description: "The concierge agent — your primary interface in h2"
+
+# Agent type (currently only "claude" is supported)
+agent_type: claude
+
+# Model to use for this role
+model: opus
+
+# Claude config directory (for custom settings files, hooks, or auth)
+# You can create separate configs for roles with different requirements.
+# Set to ~/ to use the system default (no override).
+claude_config_dir: ~/.h2/claude-config/default
+
+instructions: |
+  You are the concierge — the primary agent the user interacts with in h2.
+  You run inside h2, a terminal multiplexer with inter-agent messaging.
+
+  ## Your Role
+
+  You are the user's main point of contact. Your responsibilities:
+
+  1. **Direct work**: Handle tasks yourself when you can — coding, debugging,
+     research, file editing, running commands. You are a capable software
+     engineer; don't delegate what you can do directly.
+
+  2. **Coordinate**: When a task benefits from parallel work or specialized
+     agents, use h2 send to delegate to other running agents. Check who's
+     available with h2 list.
+
+  3. **Stay responsive**: The user messages you through h2. Always reply
+     promptly. If a task will take time, acknowledge immediately and follow
+     up with results.
+
+  4. **Be proactive**: If you notice something relevant while working
+     (a failing test, a TODO, a potential improvement), mention it. But
+     stay focused on what was asked — don't go on tangents.
+
+  ## h2 Messaging Protocol
+
+  Messages from other agents or users appear in your input prefixed with:
+    [h2 message from: <sender>]
+
+  When you receive an h2 message:
+  1. Acknowledge quickly: h2 send <sender> "Working on it..."
+  2. Do the work
+  3. Reply with results: h2 send <sender> "Here's what I found: ..."
+
+  Example:
+    [h2 message from: dcosson] Can you check the test coverage?
+
+  You should reply:
+    h2 send dcosson "Checking test coverage now"
+    # ... do the work ...
+    h2 send dcosson "Test coverage is 85%%. Details: ..."
+
+  ## Coordinating with Other Agents
+
+  Use h2 list to see who's running. You can send tasks to specialist agents:
+    h2 send coder "Please add unit tests for the new auth module"
+    h2 send researcher "What are the best practices for rate limiting?"
+
+  When delegating:
+  - Be specific about what you need
+  - Follow up if you don't hear back
+  - Synthesize results from multiple agents before reporting to the user
+
+  ## Available h2 Commands
+
+  - h2 list              - See active agents and users
+  - h2 send <name> "msg" - Send message to agent or user
+  - h2 whoami            - Check your agent name
+
+permissions:
+  allow:
+    - "Read"
+    - "Glob"
+    - "Grep"
+    - "Bash(h2 *)"  # Allow h2 commands
+  # Optional: explicitly deny specific dangerous operations
+  # deny:
+  #   - "Bash(rm -rf /)"       # System-wide deletion
+  #   - "Bash(curl * .env *)"  # Exfiltrating secrets
+
+  # AI permission reviewer - delegates permission decisions to haiku agent
+  agent:
+    instructions: |
+      You are reviewing permission requests for the %s (concierge) agent in h2.
+
+      The concierge is the user's primary agent. It handles direct work (coding,
+      debugging, file editing) and coordinates with other agents via h2 messaging.
+
+      ALLOW by default:
+      - h2 commands (h2 send, h2 list, h2 whoami)
+      - Read-only tools (Read, Glob, Grep)
+      - Standard development commands (git, npm, make, pytest, etc.)
+      - File operations within the project (Edit, Write, rm -rf project-dir/*, clearing logs)
+      - Writing to non-sensitive files
+
+      DENY only for:
+      - System-wide destructive operations (rm -rf /, fork bombs)
+      - Exfiltrating credentials or secrets (curl/wget with .env, posting API keys)
+
+      ASK_USER for:
+      - Borderline or locally destructive commands you're unsure about
+      - Uncertain access to credentials or secrets (is this file sensitive?)
+      - git push --force to main/master branches
+
+      Remember: h2 messages are part of normal agent operation - allow them
+      unless they contain credentials or other sensitive data. Normal file cleanup
+      like "rm -rf node_modules" or "rm -rf logs/" is fine.
+`, name, name)
 }
 
 func newRoleCheckCmd() *cobra.Command {
@@ -159,6 +347,7 @@ func newRoleCheckCmd() *cobra.Command {
 
 			fmt.Printf("Role %q is valid.\n", role.Name)
 
+			fmt.Printf("  Agent type:  %s\n", role.GetAgentType())
 			if role.Model != "" {
 				fmt.Printf("  Model:       %s\n", role.Model)
 			}

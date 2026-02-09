@@ -208,17 +208,35 @@ func TestSetupSessionDir(t *testing.T) {
 		t.Fatalf("SetupSessionDir: %v", err)
 	}
 
-	// Check CLAUDE.md was created.
-	claudeMD, err := os.ReadFile(filepath.Join(sessionDir, ".claude", "CLAUDE.md"))
-	if err != nil {
-		t.Fatalf("read CLAUDE.md: %v", err)
-	}
-	if string(claudeMD) != role.Instructions {
-		t.Errorf("CLAUDE.md content = %q, want %q", string(claudeMD), role.Instructions)
+	// Check session dir was created.
+	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+		t.Fatal("session dir should exist")
 	}
 
-	// Check settings.json was created and has expected structure.
-	settingsData, err := os.ReadFile(filepath.Join(sessionDir, ".claude", "settings.json"))
+	// Check permission-reviewer.md was created.
+	reviewerData, err := os.ReadFile(filepath.Join(sessionDir, "permission-reviewer.md"))
+	if err != nil {
+		t.Fatalf("read permission-reviewer.md: %v", err)
+	}
+	if string(reviewerData) != role.Permissions.Agent.Instructions {
+		t.Errorf("permission-reviewer.md content = %q, want %q", string(reviewerData), role.Permissions.Agent.Instructions)
+	}
+
+	// No .claude subdir should be created.
+	if _, err := os.Stat(filepath.Join(sessionDir, ".claude")); !os.IsNotExist(err) {
+		t.Error(".claude subdir should not exist in session dir")
+	}
+}
+
+func TestEnsureClaudeConfigDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "claude-config")
+
+	if err := EnsureClaudeConfigDir(dir); err != nil {
+		t.Fatalf("EnsureClaudeConfigDir: %v", err)
+	}
+
+	// Check settings.json was created with hooks.
+	settingsData, err := os.ReadFile(filepath.Join(dir, "settings.json"))
 	if err != nil {
 		t.Fatalf("read settings.json: %v", err)
 	}
@@ -227,26 +245,6 @@ func TestSetupSessionDir(t *testing.T) {
 		t.Fatalf("parse settings.json: %v", err)
 	}
 
-	// Check model.
-	if settings["model"] != "opus" {
-		t.Errorf("model = %v, want opus", settings["model"])
-	}
-
-	// Check permissions.
-	perms, ok := settings["permissions"].(map[string]any)
-	if !ok {
-		t.Fatal("permissions not found in settings.json")
-	}
-	allow, ok := perms["allow"].([]any)
-	if !ok || len(allow) != 3 {
-		t.Errorf("allow = %v, want 3 entries", perms["allow"])
-	}
-	deny, ok := perms["deny"].([]any)
-	if !ok || len(deny) != 1 {
-		t.Errorf("deny = %v, want 1 entry", perms["deny"])
-	}
-
-	// Check hooks exist.
 	hooks, ok := settings["hooks"].(map[string]any)
 	if !ok {
 		t.Fatal("hooks not found in settings.json")
@@ -258,13 +256,14 @@ func TestSetupSessionDir(t *testing.T) {
 		t.Error("PermissionRequest hook not found")
 	}
 
-	// Check permission-reviewer.md was created.
-	reviewerData, err := os.ReadFile(filepath.Join(sessionDir, "permission-reviewer.md"))
-	if err != nil {
-		t.Fatalf("read permission-reviewer.md: %v", err)
+	// Calling again should not overwrite existing settings.json.
+	os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"custom": true}`), 0o644)
+	if err := EnsureClaudeConfigDir(dir); err != nil {
+		t.Fatalf("EnsureClaudeConfigDir (2nd call): %v", err)
 	}
-	if string(reviewerData) != role.Permissions.Agent.Instructions {
-		t.Errorf("permission-reviewer.md content = %q, want %q", string(reviewerData), role.Permissions.Agent.Instructions)
+	data, _ := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if string(data) != `{"custom": true}` {
+		t.Error("settings.json should not be overwritten on second call")
 	}
 }
 
@@ -290,6 +289,142 @@ func TestSetupSessionDir_NoAgent(t *testing.T) {
 	// permission-reviewer.md should NOT exist.
 	if _, err := os.Stat(filepath.Join(sessionDir, "permission-reviewer.md")); !os.IsNotExist(err) {
 		t.Error("permission-reviewer.md should not exist when no agent configured")
+	}
+}
+
+func TestIsClaudeConfigAuthenticated(t *testing.T) {
+	tests := []struct {
+		name           string
+		claudeJSON     string
+		want           bool
+		wantErr        bool
+	}{
+		{
+			name: "authenticated with oauthAccount",
+			claudeJSON: `{
+				"userID": "test-user-id",
+				"oauthAccount": {
+					"accountUuid": "test-uuid",
+					"emailAddress": "test@example.com"
+				}
+			}`,
+			want:    true,
+			wantErr: false,
+		},
+		{
+			name: "not authenticated - no oauthAccount",
+			claudeJSON: `{
+				"userID": "test-user-id"
+			}`,
+			want:    false,
+			wantErr: false,
+		},
+		{
+			name: "not authenticated - empty oauthAccount",
+			claudeJSON: `{
+				"userID": "test-user-id",
+				"oauthAccount": {}
+			}`,
+			want:    false,
+			wantErr: false,
+		},
+		{
+			name: "not authenticated - missing fields",
+			claudeJSON: `{
+				"userID": "test-user-id",
+				"oauthAccount": {
+					"accountUuid": "test-uuid"
+				}
+			}`,
+			want:    false,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.claudeJSON != "" {
+				claudeJSONPath := filepath.Join(dir, ".claude.json")
+				if err := os.WriteFile(claudeJSONPath, []byte(tt.claudeJSON), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got, err := IsClaudeConfigAuthenticated(dir)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsClaudeConfigAuthenticated() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("IsClaudeConfigAuthenticated() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Test missing .claude.json
+	t.Run("not authenticated - no file", func(t *testing.T) {
+		dir := t.TempDir()
+		got, err := IsClaudeConfigAuthenticated(dir)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if got {
+			t.Error("should not be authenticated when .claude.json doesn't exist")
+		}
+	})
+}
+
+func TestRole_GetClaudeConfigDir(t *testing.T) {
+	// Save and restore HOME env var.
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+	os.Setenv("HOME", "/Users/testuser")
+
+	tests := []struct {
+		name            string
+		claudeConfigDir string
+		want            string
+	}{
+		{
+			name:            "default when not specified",
+			claudeConfigDir: "",
+			want:            "/Users/testuser/.h2/claude-config/default",
+		},
+		{
+			name:            "absolute path",
+			claudeConfigDir: "/custom/path/to/config",
+			want:            "/custom/path/to/config",
+		},
+		{
+			name:            "tilde expansion",
+			claudeConfigDir: "~/my-claude-config",
+			want:            "/Users/testuser/my-claude-config",
+		},
+		{
+			name:            "relative path within h2",
+			claudeConfigDir: "/Users/testuser/.h2/claude-config/custom",
+			want:            "/Users/testuser/.h2/claude-config/custom",
+		},
+		{
+			name:            "tilde only means system default",
+			claudeConfigDir: "~/",
+			want:            "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			role := &Role{
+				Name:            "test",
+				ClaudeConfigDir: tt.claudeConfigDir,
+				Instructions:    "test",
+			}
+			got := role.GetClaudeConfigDir()
+			if got != tt.want {
+				t.Errorf("GetClaudeConfigDir() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

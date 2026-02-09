@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -25,9 +24,10 @@ type Session struct {
 	Name       string
 	Command    string
 	Args       []string
-	SessionID  string // Claude Code session ID (UUID), set for claude commands
-	RoleName   string // Role name, if launched with --role
-	SessionDir string // Session directory path (~/.h2/sessions/<name>/)
+	SessionID      string // Claude Code session ID (UUID), set for claude commands
+	RoleName       string // Role name, if launched with --role
+	SessionDir     string // Session directory path (~/.h2/sessions/<name>/)
+	ClaudeConfigDir string // Shared Claude config dir (used as CLAUDE_CONFIG_DIR)
 	Queue      *message.MessageQueue
 	AgentName  string
 	Agent      *agent.Agent
@@ -287,7 +287,9 @@ func (s *Session) RunDaemon() error {
 	}
 	if s.SessionDir != "" {
 		s.ExtraEnv["H2_SESSION_DIR"] = s.SessionDir
-		s.ExtraEnv["CLAUDE_CONFIG_DIR"] = filepath.Join(s.SessionDir, ".claude")
+	}
+	if s.ClaudeConfigDir != "" {
+		s.ExtraEnv["CLAUDE_CONFIG_DIR"] = s.ClaudeConfigDir
 	}
 
 	// Start child in a PTY.

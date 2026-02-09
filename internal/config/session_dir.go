@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"gopkg.in/yaml.v3"
 )
 
 // SessionsDir returns the directory where agent session dirs are created (~/.h2/sessions/).
@@ -19,31 +17,14 @@ func SessionDir(agentName string) string {
 	return filepath.Join(SessionsDir(), agentName)
 }
 
-// SetupSessionDir creates the session directory for an agent and generates
-// Claude Code config files from the role definition.
+// SetupSessionDir creates the session directory for an agent and writes
+// per-agent files (e.g. permission-reviewer.md). Claude Code config
+// (auth, hooks, settings) lives in the shared claude config dir, not here.
 func SetupSessionDir(agentName string, role *Role) (string, error) {
 	sessionDir := SessionDir(agentName)
-	claudeDir := filepath.Join(sessionDir, ".claude")
 
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return "", fmt.Errorf("create session dir: %w", err)
-	}
-
-	// Generate CLAUDE.md from role instructions.
-	claudeMD := filepath.Join(claudeDir, "CLAUDE.md")
-	if err := os.WriteFile(claudeMD, []byte(role.Instructions), 0o644); err != nil {
-		return "", fmt.Errorf("write CLAUDE.md: %w", err)
-	}
-
-	// Generate settings.json.
-	settings := buildSettings(role)
-	settingsJSON, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal settings.json: %w", err)
-	}
-	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, settingsJSON, 0o644); err != nil {
-		return "", fmt.Errorf("write settings.json: %w", err)
 	}
 
 	// Write permission-reviewer.md if permissions.agent is configured.
@@ -55,6 +36,29 @@ func SetupSessionDir(agentName string, role *Role) (string, error) {
 	}
 
 	return sessionDir, nil
+}
+
+// EnsureClaudeConfigDir creates the shared Claude config directory and writes
+// the h2 standard settings.json (hooks + permissions) if it doesn't exist yet.
+func EnsureClaudeConfigDir(configDir string) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("create claude config dir: %w", err)
+	}
+
+	// Write settings.json with h2 hooks if it doesn't exist.
+	settingsPath := filepath.Join(configDir, "settings.json")
+	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+		settings := buildH2Settings()
+		settingsJSON, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal settings.json: %w", err)
+		}
+		if err := os.WriteFile(settingsPath, settingsJSON, 0o644); err != nil {
+			return fmt.Errorf("write settings.json: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // hookEntry represents a single hook in the settings.json hooks array.
@@ -70,50 +74,15 @@ type hookMatcher struct {
 	Hooks   []hookEntry `json:"hooks"`
 }
 
-// buildSettings constructs the settings.json content from a role.
-func buildSettings(role *Role) map[string]any {
+// buildH2Settings constructs the settings.json content with h2 standard hooks.
+func buildH2Settings() map[string]any {
 	settings := make(map[string]any)
-
-	// Model.
-	if role.Model != "" {
-		settings["model"] = role.Model
-	}
-
-	// Permissions (allow/deny only — agent section is handled separately).
-	perms := make(map[string]any)
-	if len(role.Permissions.Allow) > 0 {
-		perms["allow"] = role.Permissions.Allow
-	}
-	if len(role.Permissions.Deny) > 0 {
-		perms["deny"] = role.Permissions.Deny
-	}
-	if len(perms) > 0 {
-		settings["permissions"] = perms
-	}
-
-	// Hooks: h2 standard hooks + role custom hooks.
-	hooks := buildHooks(role)
-	settings["hooks"] = hooks
-
-	// Merge any additional settings from the role.
-	if role.Settings.Kind != 0 {
-		var extra map[string]any
-		raw, err := yaml.Marshal(&role.Settings)
-		if err == nil {
-			if json.Unmarshal(yamlToJSON(raw), &extra) == nil {
-				for k, v := range extra {
-					settings[k] = v
-				}
-			}
-		}
-	}
-
+	settings["hooks"] = buildH2Hooks()
 	return settings
 }
 
-// buildHooks creates the hooks section of settings.json with h2 standard hooks
-// and any role-specific custom hooks merged in.
-func buildHooks(role *Role) map[string][]hookMatcher {
+// buildH2Hooks creates the hooks section with h2 standard hooks.
+func buildH2Hooks() map[string][]hookMatcher {
 	collectHook := hookEntry{
 		Type:    "command",
 		Command: "h2 hook collect",
@@ -150,48 +119,6 @@ func buildHooks(role *Role) map[string][]hookMatcher {
 		Hooks:   []hookEntry{permissionHook, collectHook},
 	}}
 
-	// TODO: merge role.Hooks custom hooks when we support that.
-
 	return hooks
-}
-
-// yamlToJSON converts YAML bytes to JSON bytes via round-trip through interface{}.
-func yamlToJSON(yamlBytes []byte) []byte {
-	var v any
-	if err := yaml.Unmarshal(yamlBytes, &v); err != nil {
-		return nil
-	}
-	j, err := json.Marshal(convertYAMLToJSON(v))
-	if err != nil {
-		return nil
-	}
-	return j
-}
-
-// convertYAMLToJSON recursively converts YAML-decoded values to JSON-compatible types.
-// YAML decodes maps as map[string]any but sometimes as map[any]any.
-func convertYAMLToJSON(v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		m := make(map[string]any)
-		for k, val := range v {
-			m[k] = convertYAMLToJSON(val)
-		}
-		return m
-	case map[any]any:
-		m := make(map[string]any)
-		for k, val := range v {
-			m[fmt.Sprint(k)] = convertYAMLToJSON(val)
-		}
-		return m
-	case []any:
-		arr := make([]any, len(v))
-		for i, val := range v {
-			arr[i] = convertYAMLToJSON(val)
-		}
-		return arr
-	default:
-		return v
-	}
 }
 
