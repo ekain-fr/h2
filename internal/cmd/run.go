@@ -73,7 +73,7 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 				}
 
 				if name == "" {
-					name = role.Name
+					name = session.GenerateName()
 				}
 
 				dir, err := config.SetupSessionDir(name, role)
