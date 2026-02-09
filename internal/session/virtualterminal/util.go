@@ -64,6 +64,42 @@ func IsShiftEnterSequence(seq []byte) bool {
 	}
 }
 
+// IsCtrlEnterSequence reports whether the escape sequence represents Ctrl+Enter.
+// Matches kitty format (ESC[13;5u) and xterm format (ESC[27;5;13~).
+func IsCtrlEnterSequence(seq []byte) bool {
+	if len(seq) < 3 || seq[1] != '[' {
+		return false
+	}
+	final := seq[len(seq)-1]
+	params := string(seq[2 : len(seq)-1])
+	switch final {
+	case 'u':
+		return params == "13;5"
+	case '~':
+		return params == "27;5;13"
+	default:
+		return false
+	}
+}
+
+// IsCtrlEscapeSequence reports whether the escape sequence represents Ctrl+Escape.
+// Matches kitty format (ESC[27;5u) and xterm format (ESC[27;5;27~).
+func IsCtrlEscapeSequence(seq []byte) bool {
+	if len(seq) < 3 || seq[1] != '[' {
+		return false
+	}
+	final := seq[len(seq)-1]
+	params := string(seq[2 : len(seq)-1])
+	switch final {
+	case 'u':
+		return params == "27;5"
+	case '~':
+		return params == "27;5;27"
+	default:
+		return false
+	}
+}
+
 // IsTruthyEnv reports whether the environment variable is set to a truthy value.
 func IsTruthyEnv(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {

@@ -174,7 +174,7 @@ func (s *Session) NewClient() *client.Client {
 		prev := s.PassthroughOwner
 		if prev != nil && prev != cl {
 			// Kick the previous owner back to default mode.
-			prev.Mode = client.ModeDefault
+			prev.Mode = client.ModeNormal
 			prev.RenderBar()
 		}
 		s.PassthroughOwner = cl

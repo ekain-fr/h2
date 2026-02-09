@@ -25,7 +25,7 @@ func newTestClient(childRows, cols int) *Client {
 	return &Client{
 		VT:     vt,
 		Output: io.Discard,
-		Mode:   ModeDefault,
+		Mode:   ModeNormal,
 	}
 }
 
@@ -95,8 +95,8 @@ func TestClampScrollOffset_Negative(t *testing.T) {
 
 func TestEnterExitScrollMode(t *testing.T) {
 	o := newTestClient(10, 80)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 
 	o.EnterScrollMode()
@@ -109,8 +109,8 @@ func TestEnterExitScrollMode(t *testing.T) {
 
 	o.ScrollOffset = 5
 	o.ExitScrollMode()
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after exit, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after exit, got %d", o.Mode)
 	}
 	if o.ScrollOffset != 0 {
 		t.Fatalf("expected offset 0 after exit, got %d", o.ScrollOffset)
@@ -170,8 +170,8 @@ func TestScrollDown_ExitsAtZero(t *testing.T) {
 
 	// Scroll down past zero should exit scroll mode.
 	o.ScrollDown(10)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after scrolling to bottom, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after scrolling to bottom, got %d", o.Mode)
 	}
 	if o.ScrollOffset != 0 {
 		t.Fatalf("expected offset 0, got %d", o.ScrollOffset)
@@ -225,18 +225,18 @@ func TestHandleSGRMouse_MalformedParams(t *testing.T) {
 	o := newTestClient(10, 80)
 	// No '<' prefix
 	o.HandleSGRMouse([]byte("64;1;1"), true)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 	// Too few params
 	o.HandleSGRMouse([]byte("<64"), true)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 	// Non-numeric button
 	o.HandleSGRMouse([]byte("<abc;1;1"), true)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 }
 
@@ -543,8 +543,8 @@ func TestExitedScrollMode_ScrollDownToBottomExits(t *testing.T) {
 
 	// Scroll down past zero exits scroll mode.
 	o.ScrollDown(10)
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after scrolling to bottom, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after scrolling to bottom, got %d", o.Mode)
 	}
 	if !o.VT.ChildExited {
 		t.Fatal("expected ChildExited to still be true")
@@ -569,57 +569,83 @@ func TestHandleScrollBytes_CtrlPassthrough(t *testing.T) {
 	}
 }
 
-// --- ctrl+b / ctrl+p / ctrl+n ---
+// --- ctrl+\ / ctrl+enter / ctrl+escape ---
 
-func TestCtrlB_EntersMenuMode(t *testing.T) {
+func TestCtrlBackslash_EntersMenuMode(t *testing.T) {
 	o := newTestClient(10, 80)
-	buf := []byte{0x02} // ctrl+b
+	buf := []byte{0x1C} // ctrl+backslash
 	o.HandleDefaultBytes(buf, 0, len(buf))
 	if o.Mode != ModeMenu {
 		t.Fatalf("expected ModeMenu, got %d", o.Mode)
 	}
 }
 
-func TestCtrlB_EntersMenuWithInput(t *testing.T) {
+func TestCtrlBackslash_EntersMenuWithInput(t *testing.T) {
 	o := newTestClient(10, 80)
 	o.Input = []byte("hello")
 	o.CursorPos = 5
-	buf := []byte{0x02} // ctrl+b
+	buf := []byte{0x1C} // ctrl+backslash
 	o.HandleDefaultBytes(buf, 0, len(buf))
 	if o.Mode != ModeMenu {
 		t.Fatalf("expected ModeMenu, got %d", o.Mode)
 	}
 }
 
-func TestCtrlP_HistoryUp(t *testing.T) {
+func TestCtrlPN_PassedThroughInNormalMode(t *testing.T) {
+	// Ctrl+P and Ctrl+N no longer navigate history — they pass through to PTY.
+	// Without a real PTY, we just verify they don't trigger history navigation.
 	o := newTestClient(10, 80)
 	o.History = []string{"first", "second"}
 	o.HistIdx = -1
 	buf := []byte{0x10} // ctrl+p
 	o.HandleDefaultBytes(buf, 0, len(buf))
-	if string(o.Input) != "second" {
-		t.Fatalf("expected 'second', got %q", string(o.Input))
+	if string(o.Input) != "" {
+		t.Fatalf("expected empty input (ctrl+p should pass through), got %q", string(o.Input))
+	}
+	if o.HistIdx != -1 {
+		t.Fatalf("expected HistIdx -1, got %d", o.HistIdx)
 	}
 }
 
-func TestCtrlN_HistoryDown(t *testing.T) {
+func TestCtrlEnterCSI_EntersMenuFromNormal(t *testing.T) {
+	// Kitty format: ESC [ 13;5 u
 	o := newTestClient(10, 80)
-	o.History = []string{"first", "second"}
-	o.HistIdx = -1
-	// Go up twice, then down once.
-	o.HandleDefaultBytes([]byte{0x10}, 0, 1)
-	o.HandleDefaultBytes([]byte{0x10}, 0, 1)
-	o.HandleDefaultBytes([]byte{0x0E}, 0, 1) // ctrl+n
-	if string(o.Input) != "second" {
-		t.Fatalf("expected 'second', got %q", string(o.Input))
+	buf := []byte{0x1B, '[', '1', '3', ';', '5', 'u'}
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu, got %d", o.Mode)
 	}
 }
 
-func TestUpDown_NoOpInDefaultMode(t *testing.T) {
+func TestCtrlEnterCSI_Xterm_EntersMenuFromNormal(t *testing.T) {
+	// xterm format: ESC [ 27;5;13 ~
+	o := newTestClient(10, 80)
+	buf := []byte{0x1B, '[', '2', '7', ';', '5', ';', '1', '3', '~'}
+	o.HandleDefaultBytes(buf, 0, len(buf))
+	if o.Mode != ModeMenu {
+		t.Fatalf("expected ModeMenu, got %d", o.Mode)
+	}
+}
+
+func TestCtrlEnterCSI_NoOpInPassthrough(t *testing.T) {
+	// Ctrl+Enter in passthrough mode should NOT switch to menu.
+	// The CSI is handled by FlushPassthroughEscIfComplete, which writes it through.
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	buf := []byte{0x1B, '[', '1', '3', ';', '5', 'u'}
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if o.Mode != ModePassthrough {
+		t.Fatalf("expected ModePassthrough, got %d", o.Mode)
+	}
+}
+
+func TestUpDown_PassedThroughInNormalMode(t *testing.T) {
+	// Up/down arrows in normal mode now pass through to the PTY.
+	// We can't verify the PTY write without a real PTY, but we verify
+	// mode stays normal and no history is triggered.
 	o := newTestClient(10, 80)
 	o.History = []string{"first", "second"}
 	o.HistIdx = -1
-	// ESC [ A = arrow up — should be a no-op in default mode
 	buf := []byte{0x1B, '[', 'A'}
 	o.HandleDefaultBytes(buf, 0, len(buf))
 	if string(o.Input) != "" {
@@ -627,6 +653,9 @@ func TestUpDown_NoOpInDefaultMode(t *testing.T) {
 	}
 	if o.HistIdx != -1 {
 		t.Fatalf("expected HistIdx -1, got %d", o.HistIdx)
+	}
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 }
 
@@ -649,8 +678,8 @@ func TestMenu_ClearInput(t *testing.T) {
 	o.CursorPos = 9
 	buf := []byte{'c'}
 	o.HandleMenuBytes(buf, 0, len(buf))
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal, got %d", o.Mode)
 	}
 	if len(o.Input) != 0 {
 		t.Fatalf("expected empty input, got %q", string(o.Input))
@@ -665,8 +694,8 @@ func TestMenu_Redraw(t *testing.T) {
 	o.Mode = ModeMenu
 	buf := []byte{'r'}
 	o.HandleMenuBytes(buf, 0, len(buf))
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after redraw, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after redraw, got %d", o.Mode)
 	}
 }
 
@@ -676,8 +705,8 @@ func TestMenu_EscExits(t *testing.T) {
 	// Bare Esc at end of buffer
 	buf := []byte{0x1B}
 	o.HandleMenuBytes(buf, 0, len(buf))
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after Esc, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after Esc, got %d", o.Mode)
 	}
 }
 
@@ -700,11 +729,42 @@ func TestMenu_HelpLabel(t *testing.T) {
 	}
 }
 
-func TestHelpLabel_Default(t *testing.T) {
+func TestHelpLabel_Normal_Legacy(t *testing.T) {
 	o := newTestClient(10, 80)
-	o.Mode = ModeDefault
+	o.Mode = ModeNormal
+	o.KeybindingMode = KeybindingsLegacy
 	got := o.HelpLabel()
-	if got != "ctrl+p/n history | Enter send | ctrl+b menu" {
+	if got != `Enter send | Ctrl+\ menu` {
+		t.Fatalf("unexpected help label: %q", got)
+	}
+}
+
+func TestHelpLabel_Normal_Kitty(t *testing.T) {
+	o := newTestClient(10, 80)
+	o.Mode = ModeNormal
+	o.KeybindingMode = KeybindingsKitty
+	got := o.HelpLabel()
+	if got != "Enter send | Ctrl+Enter menu" {
+		t.Fatalf("unexpected help label: %q", got)
+	}
+}
+
+func TestHelpLabel_Passthrough_Legacy(t *testing.T) {
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	o.KeybindingMode = KeybindingsLegacy
+	got := o.HelpLabel()
+	if got != `Ctrl+\ exit` {
+		t.Fatalf("unexpected help label: %q", got)
+	}
+}
+
+func TestHelpLabel_Passthrough_Kitty(t *testing.T) {
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	o.KeybindingMode = KeybindingsKitty
+	got := o.HelpLabel()
+	if got != "Ctrl+Esc exit" {
 		t.Fatalf("unexpected help label: %q", got)
 	}
 }
@@ -719,8 +779,8 @@ func TestMenu_DetachCallsCallback(t *testing.T) {
 	if !called {
 		t.Fatal("expected OnDetach to be called")
 	}
-	if o.Mode != ModeDefault {
-		t.Fatalf("expected ModeDefault after detach, got %d", o.Mode)
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after detach, got %d", o.Mode)
 	}
 }
 
@@ -760,5 +820,94 @@ func TestMenuLabel_WithDetach(t *testing.T) {
 	got := o.MenuLabel()
 	if got != "Menu | Enter:passthrough | c:clear | r:redraw | d:detach | q:quit" {
 		t.Fatalf("unexpected menu label: %q", got)
+	}
+}
+
+// --- Passthrough mode input changes ---
+
+func TestPassthrough_EnterStaysInPassthrough(t *testing.T) {
+	// Enter in passthrough should write \r to PTY and stay in passthrough mode.
+	// Without a real PTY we can't verify the write, but we verify the mode.
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	buf := []byte{0x0D}
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if o.Mode != ModePassthrough {
+		t.Fatalf("expected ModePassthrough after Enter, got %d", o.Mode)
+	}
+}
+
+func TestPassthrough_CtrlBackslash_Exits(t *testing.T) {
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	buf := []byte{0x1C} // ctrl+backslash
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after Ctrl+\\, got %d", o.Mode)
+	}
+}
+
+func TestPassthrough_CtrlEscapeCSI_Exits(t *testing.T) {
+	// Kitty format: ESC [ 27;5 u
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	buf := []byte{0x1B, '[', '2', '7', ';', '5', 'u'}
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after Ctrl+Esc CSI, got %d", o.Mode)
+	}
+}
+
+func TestPassthrough_CtrlEscapeCSI_Xterm_Exits(t *testing.T) {
+	// xterm format: ESC [ 27;5;27 ~
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	buf := []byte{0x1B, '[', '2', '7', ';', '5', ';', '2', '7', '~'}
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if o.Mode != ModeNormal {
+		t.Fatalf("expected ModeNormal after Ctrl+Esc xterm CSI, got %d", o.Mode)
+	}
+}
+
+func TestPassthrough_BareEscPassesThrough(t *testing.T) {
+	// A bare ESC (timer fires) should pass ESC through to child, not exit passthrough.
+	// We test this by simulating what the timer callback does.
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	// Start the pending ESC.
+	buf := []byte{0x1B}
+	o.HandlePassthroughBytes(buf, 0, len(buf))
+	if !o.PendingEsc {
+		t.Fatal("expected PendingEsc to be true")
+	}
+	// Mode should still be passthrough (ESC is pending).
+	if o.Mode != ModePassthrough {
+		t.Fatalf("expected ModePassthrough while ESC is pending, got %d", o.Mode)
+	}
+}
+
+func TestPassthrough_EscNonSequence_PassesThrough(t *testing.T) {
+	// ESC followed by a non-CSI/SS3 byte in passthrough should write ESC+byte to PTY.
+	// Without a real PTY we verify it stays in passthrough mode.
+	o := newTestClient(10, 80)
+	o.Mode = ModePassthrough
+	// ESC at end of buffer starts pending.
+	o.HandlePassthroughBytes([]byte{0x1B}, 0, 1)
+	if !o.PendingEsc {
+		t.Fatal("expected PendingEsc")
+	}
+	// Next byte is 'x' (not [ or O).
+	o.HandlePassthroughBytes([]byte{'x'}, 0, 1)
+	// Should stay in passthrough (ESC+x passed through to child).
+	if o.Mode != ModePassthrough {
+		t.Fatalf("expected ModePassthrough after ESC+x, got %d", o.Mode)
+	}
+}
+
+func TestModeLabel_Normal(t *testing.T) {
+	o := newTestClient(10, 80)
+	o.Mode = ModeNormal
+	if got := o.ModeLabel(); got != "Normal" {
+		t.Fatalf("expected 'Normal', got %q", got)
 	}
 }

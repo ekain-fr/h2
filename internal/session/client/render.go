@@ -299,7 +299,7 @@ func (c *Client) ModeLabel() string {
 	case ModeScroll:
 		return "Scroll"
 	default:
-		return "Default"
+		return "Normal"
 	}
 }
 
@@ -321,13 +321,13 @@ func (c *Client) ModeBarStyle() string {
 func (c *Client) HelpLabel() string {
 	switch c.Mode {
 	case ModePassthrough:
-		return "Enter/Esc exit"
+		return c.keybindingHelp().PassthroughMode
 	case ModeMenu:
 		return "esc exit"
 	case ModeScroll:
 		return "Scroll/Up/Down navigate | Esc exit scroll"
 	default:
-		return "ctrl+p/n history | Enter send | ctrl+b menu"
+		return c.keybindingHelp().NormalMode
 	}
 }
 

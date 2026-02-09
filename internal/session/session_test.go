@@ -336,8 +336,8 @@ func TestPassthrough_TakeOverKicksPrevOwner(t *testing.T) {
 	if s.PassthroughOwner != cl2 {
 		t.Fatal("PassthroughOwner should be cl2 after take-over")
 	}
-	if cl1.Mode != client.ModeDefault {
-		t.Fatalf("cl1 should be kicked to ModeDefault, got %v", cl1.Mode)
+	if cl1.Mode != client.ModeNormal {
+		t.Fatalf("cl1 should be kicked to ModeNormal, got %v", cl1.Mode)
 	}
 	if !s.Queue.IsPaused() {
 		t.Fatal("queue should still be paused")
@@ -376,7 +376,7 @@ func TestPassthrough_ModeChangeReleasesLock(t *testing.T) {
 	cl.Mode = client.ModePassthrough
 
 	// Simulate leaving passthrough by triggering OnModeChange.
-	cl.OnModeChange(client.ModeDefault)
+	cl.OnModeChange(client.ModeNormal)
 
 	if s.PassthroughOwner != nil {
 		t.Fatal("PassthroughOwner should be nil after mode change away from passthrough")

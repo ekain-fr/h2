@@ -23,7 +23,7 @@ var newTermOutput = func(w *os.File) *termenv.Output {
 type InputMode int
 
 const (
-	ModeDefault InputMode = iota
+	ModeNormal InputMode = iota
 	ModePassthrough
 	ModeMenu
 	ModeScroll
@@ -67,6 +67,10 @@ type Client struct {
 	ReleasePassthrough func()      // release passthrough ownership
 	TakePassthrough    func()      // force-take passthrough from current owner
 	IsPassthroughLocked func() bool // returns true if another client owns passthrough
+
+	// Keybinding mode (kitty vs legacy).
+	KeybindingMode KeybindingMode
+	KittyKeyboard  bool // true if kitty keyboard protocol is active
 }
 
 // InitClient initializes per-client state. Called by Session after creating
@@ -74,7 +78,7 @@ type Client struct {
 func (c *Client) InitClient() {
 	c.HistIdx = -1
 	c.DebugKeys = virtualterminal.IsTruthyEnv("H2_DEBUG_KEYS")
-	c.Mode = ModeDefault
+	c.Mode = ModeNormal
 	c.ScrollOffset = 0
 	c.InputPriority = message.PriorityNormal
 }
@@ -179,10 +183,16 @@ func (c *Client) SetupInteractiveTerminal() (cleanup func(), stopStatus chan str
 		return nil, nil, err
 	}
 
+	// Detect kitty keyboard protocol support.
+	c.detectKittyKeyboard()
+
 	// Enable SGR mouse reporting for scroll wheel support.
 	os.Stdout.Write([]byte("\033[?1000h\033[?1006h"))
 
 	cleanup = func() {
+		if c.KittyKeyboard {
+			os.Stdout.Write([]byte("\033[<u")) // pop kitty keyboard mode
+		}
 		os.Stdout.Write([]byte("\033[?1000l\033[?1006l"))
 		term.Restore(fd, c.VT.Restore)
 		os.Stdout.Write([]byte("\033[?25h\033[0m\r\n"))

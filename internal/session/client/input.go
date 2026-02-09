@@ -77,9 +77,9 @@ func (c *Client) StartPendingEsc() {
 		c.PendingEsc = false
 		switch c.Mode {
 		case ModePassthrough:
+			// Pass bare Escape through to the child process.
 			c.PassthroughEsc = c.PassthroughEsc[:0]
-			c.setMode(ModeDefault)
-			c.RenderBar()
+			c.writePTYOrHang([]byte{0x1B})
 		case ModeScroll:
 			c.ExitScrollMode()
 		}
@@ -101,11 +101,14 @@ func (c *Client) HandlePassthroughBytes(buf []byte, start, n int) int {
 		b := buf[i]
 		if c.PendingEsc {
 			if b != '[' && b != 'O' {
+				// Not a CSI/SS3 introducer — pass ESC + this byte through to the child.
 				c.CancelPendingEsc()
 				c.PassthroughEsc = c.PassthroughEsc[:0]
-				c.setMode(ModeDefault)
-				c.RenderBar()
-				return i
+				if !c.writePTYOrHang([]byte{0x1B, b}) {
+					return n
+				}
+				i++
+				continue
 			}
 			c.CancelPendingEsc()
 			c.PassthroughEsc = append(c.PassthroughEsc[:0], 0x1B, b)
@@ -132,7 +135,11 @@ func (c *Client) HandlePassthroughBytes(buf []byte, start, n int) int {
 			if !c.writePTYOrHang([]byte{'\r'}) {
 				return n
 			}
-			c.setMode(ModeDefault)
+			i++
+		case 0x1C: // ctrl+\ — exit passthrough (universal fallback)
+			c.CancelPendingEsc()
+			c.PassthroughEsc = c.PassthroughEsc[:0]
+			c.setMode(ModeNormal)
 			c.RenderBar()
 			i++
 		case 0x1B:
@@ -165,7 +172,7 @@ func (c *Client) HandleMenuBytes(buf []byte, start, n int) int {
 			}
 			// Bare Esc — exit menu
 			if i == n {
-				c.setMode(ModeDefault)
+				c.setMode(ModeNormal)
 				c.RenderBar()
 			}
 			continue
@@ -188,16 +195,16 @@ func (c *Client) HandleMenuBytes(buf []byte, start, n int) int {
 		case 'c', 'C': // clear input
 			c.Input = c.Input[:0]
 			c.CursorPos = 0
-			c.setMode(ModeDefault)
+			c.setMode(ModeNormal)
 			c.RenderBar()
 		case 'r', 'R': // redraw screen
 			c.Output.Write([]byte("\033[2J\033[H"))
 			c.RenderScreen()
-			c.setMode(ModeDefault)
+			c.setMode(ModeNormal)
 			c.RenderBar()
 		case 'd', 'D': // detach
 			if c.OnDetach != nil {
-				c.setMode(ModeDefault)
+				c.setMode(ModeNormal)
 				c.RenderBar()
 				c.OnDetach()
 				return n
@@ -232,16 +239,8 @@ func (c *Client) HandleDefaultBytes(buf []byte, start, n int) int {
 		}
 
 		switch b {
-		case 0x02: // ctrl+b — open menu
+		case 0x1C: // ctrl+\ — open menu (universal fallback)
 			c.setMode(ModeMenu)
-			c.RenderBar()
-
-		case 0x10: // ctrl+p — history up
-			c.HistoryUp()
-			c.RenderBar()
-
-		case 0x0E: // ctrl+n — history down
-			c.HistoryDown()
 			c.RenderBar()
 
 		case 0x09:
@@ -345,6 +344,13 @@ func (c *Client) FlushPassthroughEscIfComplete() bool {
 	if !virtualterminal.IsEscSequenceComplete(c.PassthroughEsc) {
 		return false
 	}
+	if virtualterminal.IsCtrlEscapeSequence(c.PassthroughEsc) {
+		// Ctrl+Escape exits passthrough mode (don't write to PTY).
+		c.PassthroughEsc = c.PassthroughEsc[:0]
+		c.setMode(ModeNormal)
+		c.RenderBar()
+		return true
+	}
 	if virtualterminal.IsShiftEnterSequence(c.PassthroughEsc) {
 		c.writePTYOrHang([]byte{'\n'})
 	} else {
@@ -369,14 +375,14 @@ func (c *Client) HandleEscape(remaining []byte) (consumed int, handled bool) {
 		}
 		return 1, true
 	case 'f': // meta+f — forward word
-		if c.Mode == ModeDefault && len(c.Input) > 0 {
+		if c.Mode == ModeNormal && len(c.Input) > 0 {
 			c.CursorForwardWord()
 			c.RenderBar()
 			return 1, true
 		}
 		return 0, false
 	case 'b': // meta+b — backward word
-		if c.Mode == ModeDefault && len(c.Input) > 0 {
+		if c.Mode == ModeNormal && len(c.Input) > 0 {
 			c.CursorBackwardWord()
 			c.RenderBar()
 			return 1, true
@@ -406,6 +412,8 @@ func (c *Client) HandleCSI(remaining []byte) (consumed int, handled bool) {
 	final := remaining[i]
 	totalConsumed := 1 + i + 1
 
+	params := string(remaining[:i])
+
 	switch final {
 	case 'A', 'B':
 		if c.Mode == ModePassthrough {
@@ -420,19 +428,40 @@ func (c *Client) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			}
 			break
 		}
-		// Up/Down in default or menu mode: no-op
+		if c.Mode == ModeNormal {
+			// Pass up/down arrow through to PTY (e.g. shell history).
+			c.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
+		}
 	case 'C', 'D':
 		if c.Mode == ModePassthrough {
 			c.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
 			break
 		}
-		if c.Mode == ModeDefault && len(c.Input) > 0 {
+		if c.Mode == ModeNormal && len(c.Input) > 0 {
 			if final == 'D' {
 				c.CursorLeft()
 			} else {
 				c.CursorRight()
 			}
 			c.RenderBar()
+		}
+	case 'u':
+		// Kitty keyboard protocol: CSI <code>;<modifiers> u
+		if params == "13;5" {
+			// Ctrl+Enter — open menu in normal mode.
+			if c.Mode == ModeNormal {
+				c.setMode(ModeMenu)
+				c.RenderBar()
+			}
+		}
+	case '~':
+		// xterm modifyOtherKeys format: CSI 27;<modifiers>;<code> ~
+		if params == "27;5;13" {
+			// Ctrl+Enter — open menu in normal mode.
+			if c.Mode == ModeNormal {
+				c.setMode(ModeMenu)
+				c.RenderBar()
+			}
 		}
 	case 'M', 'm':
 		c.HandleSGRMouse(remaining[:i], final == 'M')
@@ -517,7 +546,7 @@ func (c *Client) EnterScrollMode() {
 // ExitScrollMode returns to default mode and re-renders the live view.
 func (c *Client) ExitScrollMode() {
 	c.ScrollOffset = 0
-	c.setMode(ModeDefault)
+	c.setMode(ModeNormal)
 	c.RenderScreen()
 	c.RenderBar()
 }
