@@ -325,6 +325,99 @@ func TestDeliver_InterruptRetry_TriesThreeTimes(t *testing.T) {
 	}
 }
 
+func TestDeliver_InterruptCallsNoteInterrupt(t *testing.T) {
+	var buf threadSafeBuffer
+	q := NewMessageQueue()
+	stop := make(chan struct{})
+
+	msg := &Message{
+		ID:        "int-ni-1",
+		From:      "user",
+		Priority:  PriorityInterrupt,
+		Body:      "urgent",
+		Status:    StatusQueued,
+		CreatedAt: time.Now(),
+	}
+	q.Enqueue(msg)
+
+	interruptCalls := 0
+	delivered := make(chan struct{}, 1)
+	go RunDelivery(DeliveryConfig{
+		Queue:     q,
+		PtyWriter: &buf,
+		IsIdle:    func() bool { return true },
+		WaitForIdle: func(ctx context.Context) bool {
+			return true
+		},
+		NoteInterrupt: func() {
+			interruptCalls++
+		},
+		OnDeliver: func() {
+			select {
+			case delivered <- struct{}{}:
+			default:
+			}
+		},
+		Stop: stop,
+	})
+
+	select {
+	case <-delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("delivery timed out")
+	}
+	close(stop)
+
+	if interruptCalls != 1 {
+		t.Fatalf("expected 1 NoteInterrupt call, got %d", interruptCalls)
+	}
+}
+
+func TestDeliver_NormalDoesNotCallNoteInterrupt(t *testing.T) {
+	var buf threadSafeBuffer
+	q := NewMessageQueue()
+	stop := make(chan struct{})
+
+	msg := &Message{
+		ID:        "n-ni-1",
+		From:      "user",
+		Priority:  PriorityNormal,
+		Body:      "hello",
+		Status:    StatusQueued,
+		CreatedAt: time.Now(),
+	}
+	q.Enqueue(msg)
+
+	interruptCalls := 0
+	delivered := make(chan struct{}, 1)
+	go RunDelivery(DeliveryConfig{
+		Queue:     q,
+		PtyWriter: &buf,
+		IsIdle:    func() bool { return true },
+		NoteInterrupt: func() {
+			interruptCalls++
+		},
+		OnDeliver: func() {
+			select {
+			case delivered <- struct{}{}:
+			default:
+			}
+		},
+		Stop: stop,
+	})
+
+	select {
+	case <-delivered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("delivery timed out")
+	}
+	close(stop)
+
+	if interruptCalls != 0 {
+		t.Fatalf("NoteInterrupt should not be called for normal priority, got %d calls", interruptCalls)
+	}
+}
+
 func TestDeliver_NormalNoWaitForIdle(t *testing.T) {
 	var buf threadSafeBuffer
 	q := NewMessageQueue()

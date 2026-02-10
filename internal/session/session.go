@@ -92,14 +92,6 @@ type sessionPtyWriter struct {
 }
 
 func (pw *sessionPtyWriter) Write(p []byte) (int, error) {
-	// Detect Ctrl+C (0x03) — the delivery system writes this when delivering
-	// interrupt-priority messages (delivery.go sends raw 0x03 to interrupt the agent).
-	for _, b := range p {
-		if b == 0x03 {
-			pw.s.Agent.NoteInterrupt()
-			break
-		}
-	}
 	pw.s.VT.Mu.Lock()
 	defer pw.s.VT.Mu.Unlock()
 	if pw.s.VT.ChildExited || pw.s.VT.ChildHung {
@@ -612,6 +604,9 @@ func (s *Session) StartServices() {
 		},
 		WaitForIdle: func(ctx context.Context) bool {
 			return s.Agent.WaitForState(ctx, agent.StateIdle)
+		},
+		NoteInterrupt: func() {
+			s.Agent.NoteInterrupt()
 		},
 		OnDeliver: s.OnDeliver,
 		Stop:      s.stopCh,

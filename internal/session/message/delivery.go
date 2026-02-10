@@ -30,6 +30,7 @@ type DeliveryConfig struct {
 	IsIdle      IdleFunc         // checks if child is idle
 	IsBlocked   IsBlockedFunc    // checks if agent is blocked (nil = never blocked)
 	WaitForIdle WaitForIdleFunc  // blocks until idle (for interrupt retry)
+	NoteInterrupt func()         // called when sending Ctrl+C for interrupt delivery
 	OnDeliver   func()           // called after each delivery (e.g. to render)
 	Stop        <-chan struct{}
 }
@@ -102,6 +103,9 @@ func deliver(cfg DeliveryConfig, msg *Message) {
 		// If still not idle after retries, send anyway (like normal).
 		for attempt := 0; attempt < interruptRetries; attempt++ {
 			cfg.PtyWriter.Write([]byte{0x03})
+			if cfg.NoteInterrupt != nil {
+				cfg.NoteInterrupt()
+			}
 			if cfg.WaitForIdle != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), interruptWaitTimeout)
 				idle := cfg.WaitForIdle(ctx)
