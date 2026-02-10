@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"h2/internal/config"
 	"h2/internal/session"
 )
 
@@ -63,48 +62,10 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 				if roleName == "" {
 					roleName = "default"
 				}
-
-				role, err := config.LoadRole(roleName)
-				if err != nil {
-					if roleName == "default" {
-						return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
-					}
-					return fmt.Errorf("load role %q: %w", roleName, err)
-				}
-
-				if name == "" {
-					name = session.GenerateName()
-				}
-
-				dir, err := config.SetupSessionDir(name, role)
-				if err != nil {
-					return fmt.Errorf("setup session dir: %w", err)
-				}
-				sessionDir = dir
-
-				// Get the Claude config dir and ensure it exists with h2 hooks.
-				claudeConfigDir = role.GetClaudeConfigDir()
-				if claudeConfigDir != "" {
-					if err := config.EnsureClaudeConfigDir(claudeConfigDir); err != nil {
-						return fmt.Errorf("ensure claude config dir: %w", err)
-					}
-				}
-
-				cmdCommand = role.GetAgentType()
-
-				if role.Heartbeat != nil {
-					d, err := role.Heartbeat.ParseIdleTimeout()
-					if err != nil {
-						return fmt.Errorf("invalid heartbeat idle_timeout: %w", err)
-					}
-					heartbeat = session.DaemonHeartbeat{
-						IdleTimeout: d,
-						Message:     role.Heartbeat.Message,
-						Condition:   role.Heartbeat.Condition,
-					}
-				}
+				return setupAndForkAgent(name, roleName, detach)
 			}
 
+			// Agent-type or command mode: fork without a role.
 			if name == "" {
 				name = session.GenerateName()
 			}
@@ -112,7 +73,7 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 			sessionID := uuid.New().String()
 
 			// Fork a daemon process.
-			if err := session.ForkDaemon(name, sessionID, cmdCommand, cmdArgs, roleName, sessionDir, claudeConfigDir, heartbeat); err != nil {
+			if err := session.ForkDaemon(name, sessionID, cmdCommand, cmdArgs, "", sessionDir, claudeConfigDir, heartbeat); err != nil {
 				return err
 			}
 
