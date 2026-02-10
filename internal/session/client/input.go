@@ -446,13 +446,17 @@ func (c *Client) HandleCSI(remaining []byte) (consumed int, handled bool) {
 			c.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
 			break
 		}
-		if c.Mode == ModeNormal && len(c.Input) > 0 {
-			if final == 'D' {
-				c.CursorLeft()
+		if c.Mode == ModeNormal {
+			if len(c.Input) > 0 {
+				if final == 'D' {
+					c.CursorLeft()
+				} else {
+					c.CursorRight()
+				}
+				c.RenderBar()
 			} else {
-				c.CursorRight()
+				c.writePTYOrHang(append([]byte{0x1B, '['}, remaining[:i+1]...))
 			}
-			c.RenderBar()
 		}
 	case 'u':
 		// Kitty keyboard protocol: CSI <code>;<modifiers> u
