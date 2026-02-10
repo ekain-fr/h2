@@ -8,8 +8,8 @@ import (
 	"h2/internal/session/message"
 )
 
-// KeepaliveConfig holds the parameters for the keepalive nudge goroutine.
-type KeepaliveConfig struct {
+// HeartbeatConfig holds the parameters for the heartbeat nudge goroutine.
+type HeartbeatConfig struct {
 	IdleTimeout time.Duration
 	Message     string
 	Condition   string // optional shell command; nudge only if exit code 0
@@ -20,10 +20,10 @@ type KeepaliveConfig struct {
 	Stop      <-chan struct{}
 }
 
-// RunKeepalive monitors agent state and sends a nudge message when the agent
+// RunHeartbeat monitors agent state and sends a nudge message when the agent
 // has been idle for the configured duration. If a condition command is set,
 // the nudge is only sent when the command exits 0.
-func RunKeepalive(cfg KeepaliveConfig) {
+func RunHeartbeat(cfg HeartbeatConfig) {
 	for {
 		// Wait for agent to become idle.
 		if !waitForIdle(cfg.Agent, cfg.Stop) {
@@ -53,7 +53,7 @@ func RunKeepalive(cfg KeepaliveConfig) {
 		}
 
 		// Send the nudge.
-		message.PrepareMessage(cfg.Queue, cfg.AgentName, "h2-keepalive", cfg.Message, message.PriorityIdle)
+		message.PrepareMessage(cfg.Queue, cfg.AgentName, "h2-heartbeat", cfg.Message, message.PriorityIdle)
 	}
 }
 

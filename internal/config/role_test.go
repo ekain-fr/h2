@@ -428,12 +428,12 @@ func TestRole_GetClaudeConfigDir(t *testing.T) {
 	}
 }
 
-func TestLoadRoleFrom_WithKeepalive(t *testing.T) {
+func TestLoadRoleFrom_WithHeartbeat(t *testing.T) {
 	yaml := `
 name: scheduler
 instructions: |
   You are a scheduler agent.
-keepalive:
+heartbeat:
   idle_timeout: 30s
   message: "Check bd ready for new tasks to assign."
   condition: "bd ready -q"
@@ -445,21 +445,21 @@ keepalive:
 		t.Fatalf("LoadRoleFrom: %v", err)
 	}
 
-	if role.Keepalive == nil {
-		t.Fatal("Keepalive should not be nil")
+	if role.Heartbeat == nil {
+		t.Fatal("Heartbeat should not be nil")
 	}
-	if role.Keepalive.IdleTimeout != "30s" {
-		t.Errorf("IdleTimeout = %q, want %q", role.Keepalive.IdleTimeout, "30s")
+	if role.Heartbeat.IdleTimeout != "30s" {
+		t.Errorf("IdleTimeout = %q, want %q", role.Heartbeat.IdleTimeout, "30s")
 	}
-	if role.Keepalive.Message != "Check bd ready for new tasks to assign." {
-		t.Errorf("Message = %q, want %q", role.Keepalive.Message, "Check bd ready for new tasks to assign.")
+	if role.Heartbeat.Message != "Check bd ready for new tasks to assign." {
+		t.Errorf("Message = %q, want %q", role.Heartbeat.Message, "Check bd ready for new tasks to assign.")
 	}
-	if role.Keepalive.Condition != "bd ready -q" {
-		t.Errorf("Condition = %q, want %q", role.Keepalive.Condition, "bd ready -q")
+	if role.Heartbeat.Condition != "bd ready -q" {
+		t.Errorf("Condition = %q, want %q", role.Heartbeat.Condition, "bd ready -q")
 	}
 }
 
-func TestLoadRoleFrom_KeepaliveOptional(t *testing.T) {
+func TestLoadRoleFrom_HeartbeatOptional(t *testing.T) {
 	yaml := `
 name: simple
 instructions: |
@@ -472,12 +472,12 @@ instructions: |
 		t.Fatalf("LoadRoleFrom: %v", err)
 	}
 
-	if role.Keepalive != nil {
-		t.Error("Keepalive should be nil when not specified")
+	if role.Heartbeat != nil {
+		t.Error("Heartbeat should be nil when not specified")
 	}
 }
 
-func TestKeepaliveConfig_ParseIdleTimeout(t *testing.T) {
+func TestHeartbeatConfig_ParseIdleTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -493,7 +493,7 @@ func TestKeepaliveConfig_ParseIdleTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			k := &KeepaliveConfig{IdleTimeout: tt.input}
+			k := &HeartbeatConfig{IdleTimeout: tt.input}
 			_, err := k.ParseIdleTimeout()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseIdleTimeout(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
@@ -502,7 +502,7 @@ func TestKeepaliveConfig_ParseIdleTimeout(t *testing.T) {
 	}
 
 	// Verify actual parsed value.
-	k := &KeepaliveConfig{IdleTimeout: "30s"}
+	k := &HeartbeatConfig{IdleTimeout: "30s"}
 	d, _ := k.ParseIdleTimeout()
 	if d != 30*1e9 { // 30 seconds in nanoseconds
 		t.Errorf("parsed duration = %v, want 30s", d)

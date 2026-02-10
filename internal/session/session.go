@@ -42,10 +42,10 @@ type Session struct {
 	// ExtraEnv holds additional environment variables to pass to the child process.
 	ExtraEnv map[string]string
 
-	// Keepalive nudge configuration.
-	KeepaliveIdleTimeout time.Duration
-	KeepaliveMessage     string
-	KeepaliveCondition   string
+	// Heartbeat nudge configuration.
+	HeartbeatIdleTimeout time.Duration
+	HeartbeatMessage     string
+	HeartbeatCondition   string
 
 	// Daemon holds the networking/attach layer (nil in interactive mode).
 	Daemon    *Daemon
@@ -315,12 +315,12 @@ func (s *Session) RunDaemon() error {
 	// Start delivery loop.
 	go s.StartServices()
 
-	// Launch keepalive nudge goroutine if configured.
-	if s.KeepaliveIdleTimeout > 0 {
-		go RunKeepalive(KeepaliveConfig{
-			IdleTimeout: s.KeepaliveIdleTimeout,
-			Message:     s.KeepaliveMessage,
-			Condition:   s.KeepaliveCondition,
+	// Launch heartbeat nudge goroutine if configured.
+	if s.HeartbeatIdleTimeout > 0 {
+		go RunHeartbeat(HeartbeatConfig{
+			IdleTimeout: s.HeartbeatIdleTimeout,
+			Message:     s.HeartbeatMessage,
+			Condition:   s.HeartbeatCondition,
 			Agent:       s.Agent,
 			Queue:       s.Queue,
 			AgentName:   s.AgentName,

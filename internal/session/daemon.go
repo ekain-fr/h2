@@ -19,8 +19,8 @@ type Daemon struct {
 	StartTime time.Time
 }
 
-// DaemonKeepalive holds keepalive configuration for the daemon.
-type DaemonKeepalive struct {
+// DaemonHeartbeat holds heartbeat configuration for the daemon.
+type DaemonHeartbeat struct {
 	IdleTimeout time.Duration
 	Message     string
 	Condition   string
@@ -28,15 +28,15 @@ type DaemonKeepalive struct {
 
 // RunDaemon creates a Session and Daemon, sets up the socket, and runs
 // the session in daemon mode. This is the main entry point for the _daemon command.
-func RunDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, keepalive DaemonKeepalive) error {
+func RunDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, heartbeat DaemonHeartbeat) error {
 	s := New(name, command, args)
 	s.SessionID = sessionID
 	s.RoleName = roleName
 	s.SessionDir = sessionDir
 	s.ClaudeConfigDir = claudeConfigDir
-	s.KeepaliveIdleTimeout = keepalive.IdleTimeout
-	s.KeepaliveMessage = keepalive.Message
-	s.KeepaliveCondition = keepalive.Condition
+	s.HeartbeatIdleTimeout = heartbeat.IdleTimeout
+	s.HeartbeatMessage = heartbeat.Message
+	s.HeartbeatCondition = heartbeat.Condition
 	s.StartTime = time.Now()
 
 	// Create socket directory.
@@ -116,7 +116,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 
 // ForkDaemon starts a daemon in a background process by re-execing with
 // the hidden _daemon subcommand.
-func ForkDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, keepalive DaemonKeepalive) error {
+func ForkDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, heartbeat DaemonHeartbeat) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
@@ -132,11 +132,11 @@ func ForkDaemon(name, sessionID, command string, args []string, roleName, sessio
 	if claudeConfigDir != "" {
 		daemonArgs = append(daemonArgs, "--claude-config-dir", claudeConfigDir)
 	}
-	if keepalive.IdleTimeout > 0 {
-		daemonArgs = append(daemonArgs, "--keepalive-idle-timeout", keepalive.IdleTimeout.String())
-		daemonArgs = append(daemonArgs, "--keepalive-message", keepalive.Message)
-		if keepalive.Condition != "" {
-			daemonArgs = append(daemonArgs, "--keepalive-condition", keepalive.Condition)
+	if heartbeat.IdleTimeout > 0 {
+		daemonArgs = append(daemonArgs, "--heartbeat-idle-timeout", heartbeat.IdleTimeout.String())
+		daemonArgs = append(daemonArgs, "--heartbeat-message", heartbeat.Message)
+		if heartbeat.Condition != "" {
+			daemonArgs = append(daemonArgs, "--heartbeat-condition", heartbeat.Condition)
 		}
 	}
 	daemonArgs = append(daemonArgs, "--")

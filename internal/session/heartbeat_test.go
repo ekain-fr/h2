@@ -8,13 +8,13 @@ import (
 	"h2/internal/session/message"
 )
 
-// newTestAgent creates a minimal Agent for testing keepalive.
+// newTestAgent creates a minimal Agent for testing heartbeat.
 // It uses a generic agent type so no collectors are started.
 func newTestAgent() *agent.Agent {
 	return agent.New(agent.ResolveAgentType("generic"))
 }
 
-func TestKeepalive_NudgeAfterIdleTimeout(t *testing.T) {
+func TestHeartbeat_NudgeAfterIdleTimeout(t *testing.T) {
 	a := newTestAgent()
 	defer a.Stop()
 	// Start the watchState goroutine so agent can transition to idle.
@@ -22,7 +22,7 @@ func TestKeepalive_NudgeAfterIdleTimeout(t *testing.T) {
 	q := message.NewMessageQueue()
 	stop := make(chan struct{})
 
-	go RunKeepalive(KeepaliveConfig{
+	go RunHeartbeat(HeartbeatConfig{
 		IdleTimeout: 100 * time.Millisecond,
 		Message:     "wake up",
 		Agent:       a,
@@ -31,12 +31,12 @@ func TestKeepalive_NudgeAfterIdleTimeout(t *testing.T) {
 		Stop:        stop,
 	})
 
-	// Wait for agent to become idle (2s IdleThreshold) + keepalive timeout (100ms) + buffer.
+	// Wait for agent to become idle (2s IdleThreshold) + heartbeat timeout (100ms) + buffer.
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for keepalive nudge")
+			t.Fatal("timed out waiting for heartbeat nudge")
 		default:
 		}
 		if q.PendingCount() > 0 {
@@ -49,8 +49,8 @@ func TestKeepalive_NudgeAfterIdleTimeout(t *testing.T) {
 	if msg == nil {
 		t.Fatal("expected a message in the queue")
 	}
-	if msg.From != "h2-keepalive" {
-		t.Errorf("From = %q, want %q", msg.From, "h2-keepalive")
+	if msg.From != "h2-heartbeat" {
+		t.Errorf("From = %q, want %q", msg.From, "h2-heartbeat")
 	}
 	if msg.Priority != message.PriorityIdle {
 		t.Errorf("Priority = %v, want PriorityIdle", msg.Priority)
@@ -62,14 +62,14 @@ func TestKeepalive_NudgeAfterIdleTimeout(t *testing.T) {
 	close(stop)
 }
 
-func TestKeepalive_CancelledWhenAgentGoesActive(t *testing.T) {
+func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
 	q := message.NewMessageQueue()
 	stop := make(chan struct{})
 
-	go RunKeepalive(KeepaliveConfig{
+	go RunHeartbeat(HeartbeatConfig{
 		IdleTimeout: 500 * time.Millisecond,
 		Message:     "should not arrive",
 		Agent:       a,
@@ -102,7 +102,7 @@ func TestKeepalive_CancelledWhenAgentGoesActive(t *testing.T) {
 	close(stop)
 }
 
-func TestKeepalive_ConditionGates(t *testing.T) {
+func TestHeartbeat_ConditionGates(t *testing.T) {
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -110,7 +110,7 @@ func TestKeepalive_ConditionGates(t *testing.T) {
 	stop := make(chan struct{})
 
 	// Use "false" as condition — should prevent nudge.
-	go RunKeepalive(KeepaliveConfig{
+	go RunHeartbeat(HeartbeatConfig{
 		IdleTimeout: 100 * time.Millisecond,
 		Message:     "gated message",
 		Condition:   "false",
@@ -140,7 +140,7 @@ func TestKeepalive_ConditionGates(t *testing.T) {
 	close(stop)
 }
 
-func TestKeepalive_ConditionTrue(t *testing.T) {
+func TestHeartbeat_ConditionTrue(t *testing.T) {
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -148,7 +148,7 @@ func TestKeepalive_ConditionTrue(t *testing.T) {
 	stop := make(chan struct{})
 
 	// Use "true" as condition — should allow nudge.
-	go RunKeepalive(KeepaliveConfig{
+	go RunHeartbeat(HeartbeatConfig{
 		IdleTimeout: 100 * time.Millisecond,
 		Message:     "conditional nudge",
 		Condition:   "true",
@@ -162,7 +162,7 @@ func TestKeepalive_ConditionTrue(t *testing.T) {
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for keepalive nudge")
+			t.Fatal("timed out waiting for heartbeat nudge")
 		default:
 		}
 		if q.PendingCount() > 0 {
@@ -182,7 +182,7 @@ func TestKeepalive_ConditionTrue(t *testing.T) {
 	close(stop)
 }
 
-func TestKeepalive_StopTerminatesLoop(t *testing.T) {
+func TestHeartbeat_StopTerminatesLoop(t *testing.T) {
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -191,7 +191,7 @@ func TestKeepalive_StopTerminatesLoop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunKeepalive(KeepaliveConfig{
+		RunHeartbeat(HeartbeatConfig{
 			IdleTimeout: 10 * time.Second, // long timeout
 			Message:     "should not arrive",
 			Agent:       a,
@@ -209,7 +209,7 @@ func TestKeepalive_StopTerminatesLoop(t *testing.T) {
 	case <-done:
 		// Good — goroutine exited.
 	case <-time.After(2 * time.Second):
-		t.Fatal("RunKeepalive did not exit after stop was closed")
+		t.Fatal("RunHeartbeat did not exit after stop was closed")
 	}
 
 	if q.PendingCount() != 0 {
