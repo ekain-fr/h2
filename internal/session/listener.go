@@ -35,6 +35,8 @@ func (d *Daemon) handleConn(conn net.Conn) {
 		d.handleAttach(conn, req)
 	case "hook_event":
 		d.handleHookEvent(conn, req)
+	case "stop":
+		d.handleStop(conn)
 	default:
 		message.SendResponse(conn, &message.Response{
 			Error: "unknown request type: " + req.Type,
@@ -110,6 +112,16 @@ func (d *Daemon) handleStatus(conn net.Conn) {
 		OK:    true,
 		Agent: d.AgentInfo(),
 	})
+}
+
+func (d *Daemon) handleStop(conn net.Conn) {
+	defer conn.Close()
+	message.SendResponse(conn, &message.Response{OK: true})
+
+	// Trigger graceful shutdown: set Quit so lifecycleLoop exits after Wait().
+	s := d.Session
+	s.Quit = true
+	s.VT.KillChild()
 }
 
 func (d *Daemon) handleHookEvent(conn net.Conn, req *message.Request) {

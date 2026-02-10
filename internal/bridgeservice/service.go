@@ -23,6 +23,7 @@ type Service struct {
 	socketDir  string // ~/.h2/sockets/
 	user       string // "from" field for inbound messages
 	lastSender string // tracks last agent who sent outbound
+	cancel     context.CancelFunc
 	mu         sync.Mutex
 }
 
@@ -39,6 +40,7 @@ func New(bridges []bridge.Bridge, concierge, socketDir, user string) *Service {
 // Run starts all receiver bridges and the bridge socket listener.
 // It blocks until ctx is cancelled.
 func (s *Service) Run(ctx context.Context) error {
+	ctx, s.cancel = context.WithCancel(ctx)
 	log.Printf("bridge: starting for user %q, concierge=%q, %d bridges", s.user, s.concierge, len(s.bridges))
 	for _, b := range s.bridges {
 		log.Printf("bridge: loaded %s", b.Name())
@@ -120,9 +122,12 @@ func (s *Service) handleConn(conn net.Conn) {
 	case "send":
 		s.handleOutbound(req.From, req.Body)
 		message.SendResponse(conn, &message.Response{OK: true})
+	case "stop":
+		message.SendResponse(conn, &message.Response{OK: true})
+		s.cancel()
 	default:
 		message.SendResponse(conn, &message.Response{
-			Error: "bridge only handles 'send' requests",
+			Error: "bridge only handles 'send' and 'stop' requests",
 		})
 	}
 }

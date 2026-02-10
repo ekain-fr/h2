@@ -10,7 +10,7 @@ import (
 
 // Request is the JSON request sent over the Unix socket.
 type Request struct {
-	Type string `json:"type"` // "send", "attach", "show", "status", "hook_event"
+	Type string `json:"type"` // "send", "attach", "show", "status", "hook_event", "stop"
 
 	// send fields
 	Priority string `json:"priority,omitempty"`

@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 		newSessionCmd(),
 		newAuthCmd(),
 		newPeekCmd(),
+		newStopCmd(),
 	)
 
 	return rootCmd
