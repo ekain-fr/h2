@@ -95,28 +95,75 @@ func (l *Logger) StateChange(from, to string) {
 	})
 }
 
+// SessionSummaryData contains all metrics for a session_summary log entry.
+type SessionSummaryData struct {
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
+	CostUSD      float64
+	APIRequests  int64
+	ToolCalls    int64
+	LinesAdded   int64
+	LinesRemoved int64
+	ToolCounts   map[string]int64
+
+	// From OTEL /v1/metrics
+	ActiveTimeHrs float64
+	ModelCosts    map[string]float64          // model -> cost USD
+	ModelTokens   map[string]map[string]int64 // model -> type -> count
+
+	// From hook collector
+	ToolUseCount int64 // hook-based count (may differ from OTEL ToolCalls)
+
+	// Session-level
+	Uptime string // human-readable uptime
+
+	// Point-in-time git working tree stats
+	GitFilesChanged int
+	GitLinesAdded   int64
+	GitLinesRemoved int64
+}
+
 // SessionSummary logs cumulative session metrics at exit.
-func (l *Logger) SessionSummary(inputTokens, outputTokens int64, costUSD float64, apiRequests, toolCalls, linesAdded, linesRemoved int64, toolCounts map[string]int64) {
+func (l *Logger) SessionSummary(d SessionSummaryData) {
 	l.log(struct {
 		entry
-		InputTokens  int64            `json:"input_tokens"`
-		OutputTokens int64            `json:"output_tokens"`
-		CostUSD      float64          `json:"cost_usd"`
-		APIRequests  int64            `json:"api_requests"`
-		ToolCalls    int64            `json:"tool_calls"`
-		LinesAdded   int64            `json:"lines_added,omitempty"`
-		LinesRemoved int64            `json:"lines_removed,omitempty"`
-		ToolCounts   map[string]int64 `json:"tool_counts,omitempty"`
+		InputTokens  int64                       `json:"input_tokens"`
+		OutputTokens int64                       `json:"output_tokens"`
+		TotalTokens  int64                       `json:"total_tokens"`
+		CostUSD      float64                     `json:"cost_usd"`
+		APIRequests  int64                       `json:"api_requests"`
+		ToolCalls    int64                       `json:"tool_calls"`
+		LinesAdded   int64                       `json:"lines_added"`
+		LinesRemoved int64                       `json:"lines_removed"`
+		ToolCounts   map[string]int64            `json:"tool_counts"`
+		ActiveTimeHrs float64                    `json:"active_time_hrs"`
+		ModelCosts    map[string]float64          `json:"model_costs"`
+		ModelTokens   map[string]map[string]int64 `json:"model_tokens"`
+		ToolUseCount  int64                      `json:"tool_use_count"`
+		Uptime        string                     `json:"uptime"`
+		GitFilesChanged int                      `json:"git_files_changed"`
+		GitLinesAdded   int64                    `json:"git_lines_added"`
+		GitLinesRemoved int64                    `json:"git_lines_removed"`
 	}{
-		entry:        l.entry("session_summary"),
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CostUSD:      costUSD,
-		APIRequests:  apiRequests,
-		ToolCalls:    toolCalls,
-		LinesAdded:   linesAdded,
-		LinesRemoved: linesRemoved,
-		ToolCounts:   toolCounts,
+		entry:           l.entry("session_summary"),
+		InputTokens:     d.InputTokens,
+		OutputTokens:    d.OutputTokens,
+		TotalTokens:     d.TotalTokens,
+		CostUSD:         d.CostUSD,
+		APIRequests:     d.APIRequests,
+		ToolCalls:       d.ToolCalls,
+		LinesAdded:      d.LinesAdded,
+		LinesRemoved:    d.LinesRemoved,
+		ToolCounts:      d.ToolCounts,
+		ActiveTimeHrs:   d.ActiveTimeHrs,
+		ModelCosts:      d.ModelCosts,
+		ModelTokens:     d.ModelTokens,
+		ToolUseCount:    d.ToolUseCount,
+		Uptime:          d.Uptime,
+		GitFilesChanged: d.GitFilesChanged,
+		GitLinesAdded:   d.GitLinesAdded,
+		GitLinesRemoved: d.GitLinesRemoved,
 	})
 }
 

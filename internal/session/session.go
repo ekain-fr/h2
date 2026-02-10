@@ -621,5 +621,50 @@ func (s *Session) Stop() {
 	default:
 		close(s.stopCh)
 	}
+
+	// Gather session summary data before stopping the agent (which closes files).
+	summary := s.buildSessionSummary()
+	s.Agent.ActivityLog().SessionSummary(summary)
+
 	s.Agent.Stop()
+}
+
+// buildSessionSummary collects metrics from all available sources.
+func (s *Session) buildSessionSummary() activitylog.SessionSummaryData {
+	snap := s.Agent.Metrics()
+
+	d := activitylog.SessionSummaryData{
+		InputTokens:  snap.InputTokens,
+		OutputTokens: snap.OutputTokens,
+		TotalTokens:  snap.TotalTokens,
+		CostUSD:      snap.TotalCostUSD,
+		APIRequests:  snap.APIRequestCount,
+		ToolCalls:    snap.ToolResultCount,
+		LinesAdded:   snap.LinesAdded,
+		LinesRemoved: snap.LinesRemoved,
+		ToolCounts:   snap.ToolCounts,
+
+		ActiveTimeHrs: snap.ActiveTimeHrs,
+		ModelCosts:    snap.ModelCosts,
+		ModelTokens:   snap.ModelTokens,
+	}
+
+	// Hook collector metrics.
+	if hc := s.Agent.HookCollector(); hc != nil {
+		d.ToolUseCount = hc.Snapshot().ToolUseCount
+	}
+
+	// Session uptime.
+	if !s.StartTime.IsZero() {
+		d.Uptime = time.Since(s.StartTime).Round(time.Second).String()
+	}
+
+	// Point-in-time git working tree stats.
+	if gs := gitStats(); gs != nil {
+		d.GitFilesChanged = gs.FilesChanged
+		d.GitLinesAdded = gs.LinesAdded
+		d.GitLinesRemoved = gs.LinesRemoved
+	}
+
+	return d
 }
