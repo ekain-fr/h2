@@ -85,31 +85,6 @@ func TestPermissionDecision(t *testing.T) {
 	}
 }
 
-func TestOtelMetrics(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "activity.log")
-	l := New(true, path, "agent", "sess")
-	defer l.Close()
-
-	l.OtelMetrics(100, 200, 0.005)
-
-	lines := readLines(t, path)
-	var e struct {
-		Event        string  `json:"event"`
-		InputTokens  int64   `json:"input_tokens"`
-		OutputTokens int64   `json:"output_tokens"`
-		CostUSD      float64 `json:"cost_usd"`
-	}
-	if err := json.Unmarshal([]byte(lines[0]), &e); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if e.Event != "otel_metrics" {
-		t.Errorf("event = %q, want %q", e.Event, "otel_metrics")
-	}
-	if e.InputTokens != 100 || e.OutputTokens != 200 {
-		t.Errorf("tokens = %d/%d, want 100/200", e.InputTokens, e.OutputTokens)
-	}
-}
-
 func TestOtelConnected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "activity.log")
 	l := New(true, path, "agent", "sess")
@@ -161,7 +136,6 @@ func TestDisabledLoggerIsNoop(t *testing.T) {
 
 	l.HookEvent("sess", "PreToolUse", "Bash")
 	l.PermissionDecision("sess", "Bash", "allow", "ok")
-	l.OtelMetrics(100, 200, 0.01)
 	l.OtelConnected("/v1/logs")
 	l.StateChange("active", "idle")
 	l.SessionSummary(100, 200, 0.01, 1, 2, 0, 0, nil)
@@ -176,7 +150,6 @@ func TestNopLoggerIsNoop(t *testing.T) {
 	// Should not panic.
 	l.HookEvent("sess", "PreToolUse", "Bash")
 	l.PermissionDecision("sess", "Bash", "allow", "ok")
-	l.OtelMetrics(100, 200, 0.01)
 	l.OtelConnected("/v1/logs")
 	l.StateChange("active", "idle")
 	l.SessionSummary(100, 200, 0.01, 1, 2, 0, 0, nil)

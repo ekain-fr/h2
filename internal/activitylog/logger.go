@@ -71,21 +71,6 @@ func (l *Logger) PermissionDecision(sessionID, toolName, decision, reason string
 	})
 }
 
-// OtelMetrics logs an OTEL metrics update (token/cost delta).
-func (l *Logger) OtelMetrics(inputTokens, outputTokens int64, costUSD float64) {
-	l.log(struct {
-		entry
-		InputTokens  int64   `json:"input_tokens"`
-		OutputTokens int64   `json:"output_tokens"`
-		CostUSD      float64 `json:"cost_usd"`
-	}{
-		entry:        l.entry("otel_metrics"),
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CostUSD:      costUSD,
-	})
-}
-
 // OtelConnected logs that the OTEL logs endpoint received its first event.
 func (l *Logger) OtelConnected(endpoint string) {
 	l.log(struct {

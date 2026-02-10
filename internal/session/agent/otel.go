@@ -107,7 +107,6 @@ func (a *Agent) processLogs(payload OtelLogsPayload) {
 					if a.agentType != nil && a.metrics != nil {
 						if parser := a.agentType.OtelParser(); parser != nil {
 							if delta := parser.ParseLogRecord(lr); delta != nil {
-								a.ActivityLog().OtelMetrics(delta.InputTokens, delta.OutputTokens, delta.CostUSD)
 								a.metrics.Update(*delta)
 							}
 						}
