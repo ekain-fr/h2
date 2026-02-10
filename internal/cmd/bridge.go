@@ -17,20 +17,28 @@ const conciergeSessionName = "concierge"
 func newBridgeCmd() *cobra.Command {
 	var forUser string
 	var noConcierge bool
+	var setConcierge string
 
 	cmd := &cobra.Command{
-		Use:   "bridge [--no-concierge] -- <command> [args...]",
+		Use:   "bridge [--no-concierge | --set-concierge <name>] -- <command> [args...]",
 		Short: "Run the bridge service",
 		Long: `Runs the bridge service that routes messages between external platforms
 (Telegram, macOS notifications) and h2 agent sessions.
 
 By default, also starts a concierge session (named "concierge") running the
 given command and attaches to it interactively. Use --no-concierge to run
-only the bridge service.`,
+only the bridge service with no default routing. Use --set-concierge <name>
+to route to an existing agent without spawning a new session.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !noConcierge && len(args) == 0 {
-				return fmt.Errorf("command is required (or use --no-concierge)")
+			if noConcierge && setConcierge != "" {
+				return fmt.Errorf("cannot specify both --no-concierge and --set-concierge")
+			}
+			if setConcierge != "" && len(args) > 0 {
+				return fmt.Errorf("cannot specify both --set-concierge and a command")
+			}
+			if !noConcierge && setConcierge == "" && len(args) == 0 {
+				return fmt.Errorf("command is required (or use --no-concierge / --set-concierge)")
 			}
 			if noConcierge && len(args) > 0 {
 				return fmt.Errorf("cannot specify both --no-concierge and a command")
@@ -52,8 +60,11 @@ only the bridge service.`,
 				return fmt.Errorf("no bridges configured for user %q", user)
 			}
 
+			// Determine concierge name for routing.
 			var concierge string
-			if !noConcierge {
+			if setConcierge != "" {
+				concierge = setConcierge
+			} else if !noConcierge {
 				concierge = conciergeSessionName
 			}
 
@@ -64,7 +75,7 @@ only the bridge service.`,
 			}
 			fmt.Fprintf(os.Stderr, "Bridge service started.\n")
 
-			if noConcierge {
+			if noConcierge || setConcierge != "" {
 				return nil
 			}
 
@@ -80,6 +91,7 @@ only the bridge service.`,
 
 	cmd.Flags().StringVar(&forUser, "for", "", "Which user's bridge config to load")
 	cmd.Flags().BoolVar(&noConcierge, "no-concierge", false, "Run without a concierge session")
+	cmd.Flags().StringVar(&setConcierge, "set-concierge", "", "Route to an existing concierge agent by name")
 
 	return cmd
 }
