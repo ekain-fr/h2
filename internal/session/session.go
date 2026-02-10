@@ -92,7 +92,8 @@ type sessionPtyWriter struct {
 }
 
 func (pw *sessionPtyWriter) Write(p []byte) (int, error) {
-	// Detect Ctrl+C (0x03) to signal the agent that an interrupt occurred.
+	// Detect Ctrl+C (0x03) — the delivery system writes this when delivering
+	// interrupt-priority messages (delivery.go sends raw 0x03 to interrupt the agent).
 	for _, b := range p {
 		if b == 0x03 {
 			pw.s.Agent.NoteInterrupt()
