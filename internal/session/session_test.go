@@ -409,8 +409,8 @@ func TestPassthrough_MenuLabelShowsPassthrough(t *testing.T) {
 	_ = s // ensure callbacks are wired
 
 	label := cl.MenuLabel()
-	if !contains(label, "Enter:passthrough") {
-		t.Fatalf("expected menu label to contain 'Enter:passthrough', got %q", label)
+	if !contains(label, "p:passthrough") {
+		t.Fatalf("expected menu label to contain 'p:passthrough', got %q", label)
 	}
 }
 

@@ -661,10 +661,10 @@ func TestUpDown_PassedThroughInNormalMode(t *testing.T) {
 
 // --- Menu shortcut keys ---
 
-func TestMenu_EnterPassthrough(t *testing.T) {
+func TestMenu_PPassthrough(t *testing.T) {
 	o := newTestClient(10, 80)
 	o.Mode = ModeMenu
-	buf := []byte{0x0D} // Enter
+	buf := []byte{'p'}
 	o.HandleMenuBytes(buf, 0, len(buf))
 	if o.Mode != ModePassthrough {
 		t.Fatalf("expected ModePassthrough, got %d", o.Mode)
@@ -809,7 +809,7 @@ func TestMenu_DetachIgnoredWithoutCallback(t *testing.T) {
 func TestMenuLabel(t *testing.T) {
 	o := newTestClient(10, 80)
 	got := o.MenuLabel()
-	if got != "Menu | Enter:passthrough | c:clear | r:redraw | q:quit" {
+	if got != "Menu | p:passthrough | c:clear | r:redraw | q:quit" {
 		t.Fatalf("unexpected menu label: %q", got)
 	}
 }
@@ -818,7 +818,7 @@ func TestMenuLabel_WithDetach(t *testing.T) {
 	o := newTestClient(10, 80)
 	o.OnDetach = func() {}
 	got := o.MenuLabel()
-	if got != "Menu | Enter:passthrough | c:clear | r:redraw | d:detach | q:quit" {
+	if got != "Menu | p:passthrough | c:clear | r:redraw | d:detach | q:quit" {
 		t.Fatalf("unexpected menu label: %q", got)
 	}
 }

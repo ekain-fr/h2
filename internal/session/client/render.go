@@ -359,9 +359,9 @@ func (c *Client) StatusLabel() string {
 func (c *Client) MenuLabel() string {
 	var items string
 	if c.IsPassthroughLocked != nil && c.IsPassthroughLocked() {
-		items = "Menu | Enter:LOCKED | t:take over | c:clear | r:redraw"
+		items = "Menu | p:LOCKED | t:take over | c:clear | r:redraw"
 	} else {
-		items = "Menu | Enter:passthrough | c:clear | r:redraw"
+		items = "Menu | p:passthrough | c:clear | r:redraw"
 	}
 	if c.OnDetach != nil {
 		items += " | d:detach"
