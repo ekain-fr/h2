@@ -197,7 +197,7 @@ func (s *Session) NewClient() *client.Client {
 	}
 	cl.HookState = func() string {
 		if hc := s.Agent.HookCollector(); hc != nil {
-			return hc.State().LastToolName
+			return hc.Snapshot().LastToolName
 		}
 		return ""
 	}

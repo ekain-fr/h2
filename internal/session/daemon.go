@@ -104,7 +104,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 
 	// Pull from hook collector if active.
 	if hc := s.Agent.HookCollector(); hc != nil {
-		hs := hc.State()
+		hs := hc.Snapshot()
 		info.LastToolUse = hs.LastToolName
 		info.ToolUseCount = hs.ToolUseCount
 		info.BlockedOnPermission = hs.BlockedOnPermission

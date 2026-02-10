@@ -164,11 +164,10 @@ func (a *Agent) handleOtelMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // noteOtelEvent signals that an OTEL event was received.
-// Safe to call from HTTP handlers — does only a non-blocking channel send.
+// Safe to call from HTTP handlers.
 func (a *Agent) noteOtelEvent() {
-	select {
-	case a.otelNotify <- struct{}{}:
-	default:
+	if a.otelCollector != nil {
+		a.otelCollector.NoteEvent()
 	}
 }
 

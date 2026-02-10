@@ -1,4 +1,4 @@
-package agent
+package collector
 
 import (
 	"encoding/json"
@@ -8,9 +8,12 @@ import (
 	"h2/internal/activitylog"
 )
 
-// HookCollector accumulates lifecycle data from Claude Code hooks.
-// It is a pure data collector — it receives events, updates internal state,
-// and signals an event channel. It knows nothing about idle/active state.
+// HookCollector accumulates lifecycle data from Claude Code hooks and
+// derives active/idle/exited state from hook event names.
+//
+// Unlike OutputCollector and OtelCollector, HookCollector has no idle timer —
+// hooks provide precise start/stop signals so state is derived directly from
+// event names.
 type HookCollector struct {
 	mu                  sync.RWMutex
 	lastEvent           string
@@ -19,29 +22,46 @@ type HookCollector struct {
 	toolUseCount        int64
 	blockedOnPermission bool
 	blockedToolName     string
-	eventCh             chan string // sends event name so Agent can interpret
-	activityLog         *activitylog.Logger
+
+	activityCh  chan string // internal: event names for state derivation
+	stateCh     chan State
+	stopCh      chan struct{}
+	activityLog *activitylog.Logger
 }
 
-// NewHookCollector creates a new HookCollector.
+// NewHookCollector creates and starts a HookCollector.
 func NewHookCollector(log *activitylog.Logger) *HookCollector {
 	if log == nil {
 		log = activitylog.Nop()
 	}
-	return &HookCollector{
-		eventCh:     make(chan string, 1),
+	c := &HookCollector{
+		activityCh:  make(chan string, 8),
+		stateCh:     make(chan State, 1),
+		stopCh:      make(chan struct{}),
 		activityLog: log,
+	}
+	go c.runStateLoop()
+	return c
+}
+
+// StateCh returns the channel that receives state transitions.
+func (c *HookCollector) StateCh() <-chan State {
+	return c.stateCh
+}
+
+// Stop stops the internal state derivation goroutine.
+func (c *HookCollector) Stop() {
+	select {
+	case <-c.stopCh:
+	default:
+		close(c.stopCh)
 	}
 }
 
-// EventCh returns the channel that receives hook event names.
-func (c *HookCollector) EventCh() <-chan string {
-	return c.eventCh
-}
-
-// ProcessEvent records a hook event and sends the event name to the Agent.
+// ProcessEvent records a hook event and sends it for state derivation.
 func (c *HookCollector) ProcessEvent(eventName string, payload json.RawMessage) {
 	toolName := extractToolName(payload)
+	sessionID := extractSessionID(payload)
 
 	c.mu.Lock()
 	c.lastEvent = eventName
@@ -57,7 +77,7 @@ func (c *HookCollector) ProcessEvent(eventName string, payload json.RawMessage) 
 	if eventName == "permission_decision" {
 		decision := extractDecision(payload)
 		reason := extractReason(payload)
-		c.activityLog.PermissionDecision(toolName, decision, reason)
+		c.activityLog.PermissionDecision(sessionID, toolName, decision, reason)
 		if decision == "ask_user" {
 			c.blockedOnPermission = true
 			c.blockedToolName = toolName
@@ -66,7 +86,7 @@ func (c *HookCollector) ProcessEvent(eventName string, payload json.RawMessage) 
 			c.blockedToolName = ""
 		}
 	} else {
-		c.activityLog.HookEvent(eventName, toolName)
+		c.activityLog.HookEvent(sessionID, eventName, toolName)
 	}
 
 	// Legacy: handle blocked_permission for backward compatibility.
@@ -85,15 +105,15 @@ func (c *HookCollector) ProcessEvent(eventName string, payload json.RawMessage) 
 	}
 	c.mu.Unlock()
 
-	// Send event name to Agent's state watcher (non-blocking).
+	// Send event name to state derivation loop (non-blocking).
 	select {
-	case c.eventCh <- eventName:
+	case c.activityCh <- eventName:
 	default:
 	}
 }
 
-// State returns a point-in-time snapshot of the hook collector's data.
-func (c *HookCollector) State() HookState {
+// Snapshot returns a point-in-time snapshot of the hook collector's data.
+func (c *HookCollector) Snapshot() HookState {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return HookState{
@@ -116,11 +136,50 @@ type HookState struct {
 	BlockedToolName     string
 }
 
+// runStateLoop derives active/idle/exited state from hook event names.
+// No idle timer — hooks provide precise signals.
+func (c *HookCollector) runStateLoop() {
+	for {
+		select {
+		case eventName := <-c.activityCh:
+			var newState State
+			emit := true
+			switch eventName {
+			case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest":
+				newState = StateActive
+			case "Stop":
+				newState = StateIdle
+			case "SessionEnd":
+				newState = StateExited
+			default:
+				// SessionStart, permission_decision, blocked_permission, etc.
+				// — no state change.
+				emit = false
+			}
+			if emit {
+				c.send(newState)
+			}
+		case <-c.stopCh:
+			return
+		}
+	}
+}
+
+func (c *HookCollector) send(s State) {
+	select {
+	case c.stateCh <- s:
+	default:
+	}
+}
+
+// --- Payload extraction helpers ---
+
 // hookPayload is used to extract fields from the hook JSON payload.
 type hookPayload struct {
-	ToolName string `json:"tool_name"`
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
+	ToolName  string `json:"tool_name"`
+	SessionID string `json:"session_id"`
+	Decision  string `json:"decision"`
+	Reason    string `json:"reason"`
 }
 
 // extractToolName pulls the tool_name field from a hook payload.
@@ -133,6 +192,18 @@ func extractToolName(payload json.RawMessage) string {
 		return ""
 	}
 	return p.ToolName
+}
+
+// extractSessionID pulls the session_id field from a hook payload.
+func extractSessionID(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var p hookPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return ""
+	}
+	return p.SessionID
 }
 
 // extractDecision pulls the decision field from a hook payload.

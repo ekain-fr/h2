@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -141,11 +142,25 @@ func TestOtelCollector_AcceptsMetrics(t *testing.T) {
 	}
 }
 
+// otelOnlyAgentType is a test-only AgentType with OTEL but no hooks,
+// so the OtelCollector becomes the primary state source.
+type otelOnlyAgentType struct{}
+
+func (t otelOnlyAgentType) Name() string                                     { return "otel-only" }
+func (t otelOnlyAgentType) Command() string                                   { return "true" }
+func (t otelOnlyAgentType) DisplayCommand() string                             { return "true" }
+func (t otelOnlyAgentType) Collectors() agent.CollectorSet                     { return agent.CollectorSet{Otel: true, Hooks: false} }
+func (t otelOnlyAgentType) OtelParser() agent.OtelParser                       { return nil }
+func (t otelOnlyAgentType) PrependArgs(sessionID string) []string              { return nil }
+func (t otelOnlyAgentType) ChildEnv(cp *agent.CollectorPorts) map[string]string { return nil }
+
 func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
-	s := New("test", "claude", nil)
+	// Use an otel-only agent type so the OtelCollector is the primary
+	// state source (not hooks).
+	s := New("test", "true", nil)
+	s.Agent = agent.New(otelOnlyAgentType{})
 	defer s.Stop()
 
-	// StartCollectors starts OTEL (for claude) and the Agent's watchState goroutine.
 	if err := s.Agent.StartCollectors(); err != nil {
 		t.Fatalf("StartCollectors failed: %v", err)
 	}
@@ -169,7 +184,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 		}]
 	}`
 
-	url := s.ChildEnv()["OTEL_EXPORTER_OTLP_ENDPOINT"] + "/v1/logs"
+	url := fmt.Sprintf("http://127.0.0.1:%d/v1/logs", s.Agent.OtelPort())
 	resp, err := http.Post(url, "application/json", bytes.NewBufferString(payload))
 	if err != nil {
 		t.Fatalf("POST /v1/logs failed: %v", err)
