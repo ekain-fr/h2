@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"h2/internal/bridge"
 	"h2/internal/session/message"
@@ -75,6 +76,9 @@ func (s *Service) Run(ctx context.Context) error {
 	}()
 
 	go s.acceptLoop(ln)
+
+	// Start typing indicator loop.
+	go s.runTypingLoop(ctx)
 
 	// Block until context is done.
 	<-ctx.Done()
@@ -196,6 +200,66 @@ func (s *Service) sendToAgent(name, from, body string) error {
 		return fmt.Errorf("agent error: %s", resp.Error)
 	}
 	return nil
+}
+
+// typingTickInterval is the interval between typing indicator refreshes.
+// Telegram's typing indicator lasts ~5s, so 4s keeps it alive.
+var typingTickInterval = 4 * time.Second
+
+// runTypingLoop periodically checks the concierge agent's state and sends
+// typing indicators to all TypingIndicator bridges while the agent is active.
+func (s *Service) runTypingLoop(ctx context.Context) {
+	ticker := time.NewTicker(typingTickInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			target := s.resolveDefaultTarget()
+			if target == "" {
+				continue
+			}
+			state, err := s.queryAgentState(target)
+			if err != nil {
+				continue // agent not running yet, ignore
+			}
+			if state != "active" {
+				continue
+			}
+			for _, b := range s.bridges {
+				if ti, ok := b.(bridge.TypingIndicator); ok {
+					if err := ti.SendTyping(ctx); err != nil {
+						log.Printf("bridge: typing indicator via %s: %v", b.Name(), err)
+					}
+				}
+			}
+		}
+	}
+}
+
+// queryAgentState connects to an agent's socket and returns its state string.
+func (s *Service) queryAgentState(name string) (string, error) {
+	sockPath := filepath.Join(s.socketDir, socketdir.Format(socketdir.TypeAgent, name))
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	if err := message.SendRequest(conn, &message.Request{Type: "status"}); err != nil {
+		return "", err
+	}
+
+	resp, err := message.ReadResponse(conn)
+	if err != nil {
+		return "", err
+	}
+	if !resp.OK || resp.Agent == nil {
+		return "", fmt.Errorf("bad status response")
+	}
+	return resp.Agent.State, nil
 }
 
 // resolveDefaultTarget returns the agent to route un-addressed inbound messages to.

@@ -27,6 +27,12 @@ type Receiver interface {
 	Stop()
 }
 
+// TypingIndicator is the capability interface for bridges that can show a
+// typing indicator (e.g. Telegram's "typing..." status).
+type TypingIndicator interface {
+	SendTyping(ctx context.Context) error
+}
+
 var agentPrefixRe = regexp.MustCompile(`^([a-zA-Z0-9_-]+):\s*(.*)$`)
 
 // ParseAgentPrefix extracts an "agent-name: body" prefix from text.

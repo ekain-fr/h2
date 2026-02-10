@@ -43,6 +43,38 @@ func TestSend(t *testing.T) {
 	}
 }
 
+func TestSendTyping(t *testing.T) {
+	var gotChatID, gotAction string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botTOKEN/sendChatAction" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		r.ParseForm()
+		gotChatID = r.FormValue("chat_id")
+		gotAction = r.FormValue("action")
+		json.NewEncoder(w).Encode(apiResponse{OK: true})
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{
+		Token:   "TOKEN",
+		ChatID:  42,
+		BaseURL: srv.URL,
+	}
+
+	err := tg.SendTyping(context.Background())
+	if err != nil {
+		t.Fatalf("SendTyping: %v", err)
+	}
+	if gotChatID != "42" {
+		t.Errorf("chat_id = %q, want %q", gotChatID, "42")
+	}
+	if gotAction != "typing" {
+		t.Errorf("action = %q, want %q", gotAction, "typing")
+	}
+}
+
 func TestSend_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(apiResponse{OK: false, Description: "bad request"})

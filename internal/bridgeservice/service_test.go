@@ -37,6 +37,30 @@ func (m *mockSender) Messages() []string {
 	return append([]string(nil), m.messages...)
 }
 
+// mockTypingBridge implements Bridge, Sender, and TypingIndicator.
+type mockTypingBridge struct {
+	name        string
+	typingCalls int
+	mu          sync.Mutex
+}
+
+func (m *mockTypingBridge) Name() string { return m.name }
+func (m *mockTypingBridge) Close() error { return nil }
+func (m *mockTypingBridge) Send(_ context.Context, text string) error {
+	return nil
+}
+func (m *mockTypingBridge) SendTyping(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.typingCalls++
+	return nil
+}
+func (m *mockTypingBridge) TypingCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.typingCalls
+}
+
 // mockReceiver exposes its handler so tests can simulate inbound messages.
 type mockReceiver struct {
 	name    string
@@ -106,6 +130,70 @@ func (a *mockAgent) Received() []message.Request {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]message.Request(nil), a.received...)
+}
+
+// mockStatusAgent creates a Unix socket that responds to "status" requests
+// with a configurable state. It also handles "send" like mockAgent.
+type mockStatusAgent struct {
+	listener net.Listener
+	state    string
+	mu       sync.Mutex
+	wg       sync.WaitGroup
+}
+
+func newMockStatusAgent(t *testing.T, socketDir, name, state string) *mockStatusAgent {
+	t.Helper()
+	sockPath := filepath.Join(socketDir, socketdir.Format(socketdir.TypeAgent, name))
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &mockStatusAgent{listener: ln, state: state}
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			a.wg.Add(1)
+			go func() {
+				defer a.wg.Done()
+				defer conn.Close()
+				req, err := message.ReadRequest(conn)
+				if err != nil {
+					return
+				}
+				switch req.Type {
+				case "status":
+					a.mu.Lock()
+					st := a.state
+					a.mu.Unlock()
+					message.SendResponse(conn, &message.Response{
+						OK: true,
+						Agent: &message.AgentInfo{
+							Name:  name,
+							State: st,
+						},
+					})
+				case "send":
+					message.SendResponse(conn, &message.Response{OK: true, MessageID: "test-id"})
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		a.wg.Wait()
+	})
+	return a
+}
+
+func (a *mockStatusAgent) SetState(state string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state = state
 }
 
 // --- Helpers ---
@@ -418,5 +506,127 @@ func TestResolveDefaultTarget_NoAgents(t *testing.T) {
 	svc := New(nil, "", t.TempDir(), "alice")
 	if got := svc.resolveDefaultTarget(); got != "" {
 		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+// --- Typing loop tests ---
+
+func TestTypingLoop_SendsWhenActive(t *testing.T) {
+	typingTickInterval = 50 * time.Millisecond
+	defer func() { typingTickInterval = 4 * time.Second }()
+
+	tmpDir := shortTempDir(t)
+	_ = newMockStatusAgent(t, tmpDir, "concierge", "active")
+
+	tb := &mockTypingBridge{name: "telegram"}
+	svc := New([]bridge.Bridge{tb}, "concierge", tmpDir, "alice")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go svc.runTypingLoop(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	calls := tb.TypingCalls()
+	if calls < 2 {
+		t.Errorf("expected >= 2 typing calls when active, got %d", calls)
+	}
+}
+
+func TestTypingLoop_SkipsWhenIdle(t *testing.T) {
+	typingTickInterval = 50 * time.Millisecond
+	defer func() { typingTickInterval = 4 * time.Second }()
+
+	tmpDir := shortTempDir(t)
+	_ = newMockStatusAgent(t, tmpDir, "concierge", "idle")
+
+	tb := &mockTypingBridge{name: "telegram"}
+	svc := New([]bridge.Bridge{tb}, "concierge", tmpDir, "alice")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go svc.runTypingLoop(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	calls := tb.TypingCalls()
+	if calls != 0 {
+		t.Errorf("expected 0 typing calls when idle, got %d", calls)
+	}
+}
+
+func TestTypingLoop_SkipsWhenNoAgent(t *testing.T) {
+	typingTickInterval = 50 * time.Millisecond
+	defer func() { typingTickInterval = 4 * time.Second }()
+
+	tmpDir := shortTempDir(t)
+	// No agent socket exists.
+
+	tb := &mockTypingBridge{name: "telegram"}
+	svc := New([]bridge.Bridge{tb}, "concierge", tmpDir, "alice")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go svc.runTypingLoop(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	calls := tb.TypingCalls()
+	if calls != 0 {
+		t.Errorf("expected 0 typing calls when no agent, got %d", calls)
+	}
+}
+
+func TestTypingLoop_WorksWithoutConcierge(t *testing.T) {
+	typingTickInterval = 50 * time.Millisecond
+	defer func() { typingTickInterval = 4 * time.Second }()
+
+	tmpDir := shortTempDir(t)
+	_ = newMockStatusAgent(t, tmpDir, "myagent", "active")
+
+	tb := &mockTypingBridge{name: "telegram"}
+	svc := New([]bridge.Bridge{tb}, "", tmpDir, "alice") // no concierge
+	svc.lastSender = "myagent"                           // fallback target
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go svc.runTypingLoop(ctx)
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	calls := tb.TypingCalls()
+	if calls < 2 {
+		t.Errorf("expected >= 2 typing calls via fallback target, got %d", calls)
+	}
+}
+
+func TestTypingLoop_RespondsToStateChange(t *testing.T) {
+	typingTickInterval = 50 * time.Millisecond
+	defer func() { typingTickInterval = 4 * time.Second }()
+
+	tmpDir := shortTempDir(t)
+	agent := newMockStatusAgent(t, tmpDir, "concierge", "idle")
+
+	tb := &mockTypingBridge{name: "telegram"}
+	svc := New([]bridge.Bridge{tb}, "concierge", tmpDir, "alice")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go svc.runTypingLoop(ctx)
+
+	// Start idle — no typing calls.
+	time.Sleep(150 * time.Millisecond)
+	callsBefore := tb.TypingCalls()
+	if callsBefore != 0 {
+		t.Errorf("expected 0 typing calls while idle, got %d", callsBefore)
+	}
+
+	// Switch to active — typing calls should start.
+	agent.SetState("active")
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	callsAfter := tb.TypingCalls()
+	if callsAfter < 2 {
+		t.Errorf("expected >= 2 typing calls after becoming active, got %d", callsAfter)
 	}
 }

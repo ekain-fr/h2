@@ -20,6 +20,7 @@ func NewRootCmd() *cobra.Command {
 		listCmd,
 		newLsAlias(listCmd),
 		newShowCmd(),
+		newStatusCmd(),
 		newDaemonCmd(),
 		newWhoamiCmd(),
 		newBridgeCmd(),

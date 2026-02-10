@@ -166,6 +166,28 @@ func (t *Telegram) getUpdates(ctx context.Context) ([]update, error) {
 	return result.Result, nil
 }
 
+// SendTyping sends a "typing" chat action to the configured chat.
+// The indicator is shown for ~5 seconds by Telegram.
+func (t *Telegram) SendTyping(ctx context.Context) error {
+	resp, err := t.client.PostForm(t.apiURL("sendChatAction"), url.Values{
+		"chat_id": {strconv.FormatInt(t.ChatID, 10)},
+		"action":  {"typing"},
+	})
+	if err != nil {
+		return fmt.Errorf("telegram sendChatAction: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result apiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("telegram sendChatAction: decode response: %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("telegram sendChatAction: API error: %s", result.Description)
+	}
+	return nil
+}
+
 // Unexported types for JSON parsing.
 
 type apiResponse struct {
