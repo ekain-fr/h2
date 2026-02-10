@@ -353,6 +353,84 @@ func TestHookCollector_StateCh_PermissionDecisionEmitsSubState(t *testing.T) {
 	}
 }
 
+func TestHookCollector_NoteInterrupt_TransitionsToIdle(t *testing.T) {
+	hc := NewHookCollector(nil)
+	defer hc.Stop()
+
+	// First go Active via a tool use event.
+	hc.ProcessEvent("PreToolUse", json.RawMessage(`{"tool_name": "Bash"}`))
+	select {
+	case su := <-hc.StateCh():
+		if su.State != StateActive {
+			t.Fatalf("expected StateActive, got %v", su.State)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for StateActive")
+	}
+
+	// NoteInterrupt should transition to Idle.
+	hc.NoteInterrupt()
+	select {
+	case su := <-hc.StateCh():
+		if su.State != StateIdle {
+			t.Fatalf("expected StateIdle after NoteInterrupt, got %v", su.State)
+		}
+		if su.SubState != SubStateNone {
+			t.Fatalf("expected SubStateNone after NoteInterrupt, got %v", su.SubState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for StateIdle after NoteInterrupt")
+	}
+}
+
+func TestHookCollector_NoteInterrupt_ClearsBlockedPermission(t *testing.T) {
+	hc := NewHookCollector(nil)
+	defer hc.Stop()
+
+	// Set blocked on permission.
+	hc.ProcessEvent("permission_decision", json.RawMessage(`{"tool_name": "Bash", "decision": "ask_user"}`))
+	if !hc.Snapshot().BlockedOnPermission {
+		t.Fatal("should be blocked after permission_decision ask_user")
+	}
+
+	// Drain the state channel from the permission_decision event.
+	select {
+	case <-hc.StateCh():
+	case <-time.After(time.Second):
+		t.Fatal("timed out draining StateCh")
+	}
+
+	// NoteInterrupt should clear blocked state.
+	hc.NoteInterrupt()
+	snap := hc.Snapshot()
+	if snap.BlockedOnPermission {
+		t.Fatal("should not be blocked after NoteInterrupt")
+	}
+	if snap.BlockedToolName != "" {
+		t.Fatalf("BlockedToolName should be empty after NoteInterrupt, got %q", snap.BlockedToolName)
+	}
+	if snap.LastEvent != "Interrupt" {
+		t.Fatalf("LastEvent should be 'Interrupt', got %q", snap.LastEvent)
+	}
+}
+
+func TestHookCollector_NoteInterrupt_SnapshotFields(t *testing.T) {
+	hc := NewHookCollector(nil)
+	defer hc.Stop()
+
+	before := time.Now()
+	hc.NoteInterrupt()
+	after := time.Now()
+
+	snap := hc.Snapshot()
+	if snap.LastEvent != "Interrupt" {
+		t.Fatalf("expected LastEvent 'Interrupt', got %q", snap.LastEvent)
+	}
+	if snap.LastEventTime.Before(before) || snap.LastEventTime.After(after) {
+		t.Fatalf("LastEventTime %v not between %v and %v", snap.LastEventTime, before, after)
+	}
+}
+
 func TestHookCollector_StateCh_EventSequence(t *testing.T) {
 	hc := NewHookCollector(nil)
 	defer hc.Stop()

@@ -224,6 +224,14 @@ func (a *Agent) NoteOutput() {
 	}
 }
 
+// NoteInterrupt signals that a Ctrl+C was sent to the child process.
+// Always safe to call — no-op if the hook collector is not active.
+func (a *Agent) NoteInterrupt() {
+	if a.hooksCollector != nil {
+		a.hooksCollector.NoteInterrupt()
+	}
+}
+
 // SetExited transitions the agent to the Exited state.
 // Called by Session when the child process exits.
 func (a *Agent) SetExited() {

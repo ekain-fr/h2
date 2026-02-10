@@ -92,6 +92,13 @@ type sessionPtyWriter struct {
 }
 
 func (pw *sessionPtyWriter) Write(p []byte) (int, error) {
+	// Detect Ctrl+C (0x03) to signal the agent that an interrupt occurred.
+	for _, b := range p {
+		if b == 0x03 {
+			pw.s.Agent.NoteInterrupt()
+			break
+		}
+	}
 	pw.s.VT.Mu.Lock()
 	defer pw.s.VT.Mu.Unlock()
 	if pw.s.VT.ChildExited || pw.s.VT.ChildHung {

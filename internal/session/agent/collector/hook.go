@@ -58,6 +58,23 @@ func (c *HookCollector) Stop() {
 	}
 }
 
+// NoteInterrupt signals that a Ctrl+C was sent to the child process.
+// This is treated like a Stop event — the agent is assumed to return to
+// its prompt after an interrupt.
+func (c *HookCollector) NoteInterrupt() {
+	c.mu.Lock()
+	c.lastEvent = "Interrupt"
+	c.lastEventTime = time.Now()
+	c.blockedOnPermission = false
+	c.blockedToolName = ""
+	c.mu.Unlock()
+
+	select {
+	case c.activityCh <- "Interrupt":
+	default:
+	}
+}
+
 // ProcessEvent records a hook event and sends it for state derivation.
 func (c *HookCollector) ProcessEvent(eventName string, payload json.RawMessage) {
 	toolName := extractToolName(payload)
@@ -165,7 +182,7 @@ func (c *HookCollector) runStateLoop() {
 			switch eventName {
 			case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest":
 				currentState = StateActive
-			case "SessionStart", "Stop":
+			case "SessionStart", "Stop", "Interrupt":
 				currentState = StateIdle
 			case "SessionEnd":
 				currentState = StateExited
