@@ -57,6 +57,7 @@ type AgentInfo struct {
 	RoleName      string `json:"role,omitempty"`
 	Uptime        string `json:"uptime"`
 	State         string `json:"state"`
+	SubState      string `json:"sub_state,omitempty"`
 	StateDuration string `json:"state_duration"`
 	QueuedCount   int    `json:"queued_count"`
 

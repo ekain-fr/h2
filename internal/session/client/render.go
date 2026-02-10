@@ -335,17 +335,12 @@ func (c *Client) HelpLabel() string {
 func (c *Client) StatusLabel() string {
 	// Use Agent's derived state when available (higher fidelity than PTY timing).
 	if c.AgentState != nil {
-		state, dur := c.AgentState()
-		switch state {
-		case "active":
-			return "Active"
-		case "idle":
-			return "Idle " + dur
-		case "exited":
-			return "Exited"
-		default:
-			return state
+		state, subState, dur := c.AgentState()
+		label := agent.FormatStateLabel(state, subState)
+		if state == "idle" && dur != "" {
+			label += " " + dur
 		}
+		return label
 	}
 
 	// Fallback: PTY output timing.

@@ -192,8 +192,9 @@ func (s *Session) NewClient() *client.Client {
 		m := s.Agent.Metrics()
 		return m.TotalTokens, m.TotalCostUSD, m.EventsReceived, s.Agent.OtelPort()
 	}
-	cl.AgentState = func() (string, string) {
-		return s.State().String(), virtualterminal.FormatIdleDuration(s.StateDuration())
+	cl.AgentState = func() (string, string, string) {
+		st, sub := s.State()
+		return st.String(), sub.String(), virtualterminal.FormatIdleDuration(s.StateDuration())
 	}
 	cl.HookState = func() string {
 		if hc := s.Agent.HookCollector(); hc != nil {
@@ -540,8 +541,8 @@ func (s *Session) Metrics() agent.OtelMetricsSnapshot {
 	return s.Agent.Metrics()
 }
 
-// State returns the current agent state.
-func (s *Session) State() agent.State {
+// State returns the current agent state and sub-state.
+func (s *Session) State() (agent.State, agent.SubState) {
 	return s.Agent.State()
 }
 
@@ -591,7 +592,8 @@ func (s *Session) StartServices() {
 		AgentName: s.AgentName,
 		PtyWriter: s.PtyWriter(),
 		IsIdle: func() bool {
-			return s.Agent.State() == agent.StateIdle
+			st, _ := s.Agent.State()
+			return st == agent.StateIdle
 		},
 		WaitForIdle: func(ctx context.Context) bool {
 			return s.Agent.WaitForState(ctx, agent.StateIdle)

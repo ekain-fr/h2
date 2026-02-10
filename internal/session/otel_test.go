@@ -167,7 +167,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 
 	// Let it go idle.
 	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != agent.StateIdle {
+	if got, _ := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle, got %v", got)
 	}
 
@@ -194,7 +194,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 	// Give watchState time to process.
 	time.Sleep(100 * time.Millisecond)
 
-	if got := s.State(); got != agent.StateActive {
+	if got, _ := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive after OTEL event, got %v", got)
 	}
 }

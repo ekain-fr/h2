@@ -7,7 +7,7 @@ import "time"
 // with no further output.
 type OutputCollector struct {
 	notifyCh chan struct{}
-	stateCh  chan State
+	stateCh  chan StateUpdate
 	stopCh   chan struct{}
 }
 
@@ -15,7 +15,7 @@ type OutputCollector struct {
 func NewOutputCollector() *OutputCollector {
 	c := &OutputCollector{
 		notifyCh: make(chan struct{}, 1),
-		stateCh:  make(chan State, 1),
+		stateCh:  make(chan StateUpdate, 1),
 		stopCh:   make(chan struct{}),
 	}
 	go c.run()
@@ -30,8 +30,8 @@ func (c *OutputCollector) NoteOutput() {
 	}
 }
 
-// StateCh returns the channel that receives state transitions.
-func (c *OutputCollector) StateCh() <-chan State {
+// StateCh returns the channel that receives state updates.
+func (c *OutputCollector) StateCh() <-chan StateUpdate {
 	return c.stateCh
 }
 
@@ -62,8 +62,10 @@ func (c *OutputCollector) run() {
 }
 
 func (c *OutputCollector) send(s State) {
+	su := StateUpdate{State: s, SubState: SubStateNone}
 	select {
-	case c.stateCh <- s:
+	case <-c.stateCh:
 	default:
 	}
+	c.stateCh <- su
 }

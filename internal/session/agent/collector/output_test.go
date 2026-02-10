@@ -12,9 +12,9 @@ func TestOutputCollector_ActiveOnOutput(t *testing.T) {
 	c.NoteOutput()
 
 	select {
-	case s := <-c.StateCh():
-		if s != StateActive {
-			t.Fatalf("expected StateActive, got %v", s)
+	case su := <-c.StateCh():
+		if su.State != StateActive {
+			t.Fatalf("expected StateActive, got %v", su.State)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for StateActive")
@@ -30,9 +30,9 @@ func TestOutputCollector_IdleAfterThreshold(t *testing.T) {
 	<-c.StateCh()
 
 	select {
-	case s := <-c.StateCh():
-		if s != StateIdle {
-			t.Fatalf("expected StateIdle, got %v", s)
+	case su := <-c.StateCh():
+		if su.State != StateIdle {
+			t.Fatalf("expected StateIdle, got %v", su.State)
 		}
 	case <-time.After(IdleThreshold + time.Second):
 		t.Fatal("timed out waiting for StateIdle")
@@ -51,9 +51,9 @@ func TestOutputCollector_ResetTimerOnOutput(t *testing.T) {
 	c.NoteOutput()
 
 	select {
-	case s := <-c.StateCh():
-		if s != StateActive {
-			t.Fatalf("expected StateActive from second output, got %v", s)
+	case su := <-c.StateCh():
+		if su.State != StateActive {
+			t.Fatalf("expected StateActive from second output, got %v", su.State)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for second StateActive")

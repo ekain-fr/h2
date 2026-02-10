@@ -31,11 +31,77 @@ func (s State) String() string {
 	}
 }
 
+// SubState represents what the agent is doing within the Active state.
+type SubState int
+
+const (
+	SubStateNone                 SubState = iota // no sub-state (non-Active, or unknown)
+	SubStateThinking                             // waiting for model response
+	SubStateToolUse                              // executing a tool
+	SubStateWaitingForPermission                 // blocked on user permission approval
+)
+
+// String returns a human-readable name for the sub-state.
+func (ss SubState) String() string {
+	switch ss {
+	case SubStateNone:
+		return ""
+	case SubStateThinking:
+		return "thinking"
+	case SubStateToolUse:
+		return "tool_use"
+	case SubStateWaitingForPermission:
+		return "waiting_for_permission"
+	default:
+		return ""
+	}
+}
+
+// StateUpdate is a (State, SubState) pair emitted by collectors.
+type StateUpdate struct {
+	State    State
+	SubState SubState
+}
+
+// FormatStateLabel returns a display label like "Active (thinking)" or "Idle".
+// The subState string comes from SubState.String() (or the SubState field in
+// AgentInfo). If subState is empty, just the capitalized state is returned.
+func FormatStateLabel(state, subState string) string {
+	var label string
+	switch state {
+	case "active":
+		label = "Active"
+	case "idle":
+		label = "Idle"
+	case "exited":
+		label = "Exited"
+	case "initialized":
+		label = "Initialized"
+	default:
+		label = state
+	}
+	if subState == "" {
+		return label
+	}
+	var pretty string
+	switch subState {
+	case "thinking":
+		pretty = "thinking"
+	case "tool_use":
+		pretty = "tool use"
+	case "waiting_for_permission":
+		pretty = "permission"
+	default:
+		pretty = subState
+	}
+	return label + " (" + pretty + ")"
+}
+
 // StateCollector emits state transitions from a single signal source.
 // Each implementation has its own goroutine and idle detection logic.
 type StateCollector interface {
-	StateCh() <-chan State // receives state changes
-	Stop()                // stops internal goroutine
+	StateCh() <-chan StateUpdate // receives state updates
+	Stop()                      // stops internal goroutine
 }
 
 // resetTimer safely resets a timer, draining the channel if needed.

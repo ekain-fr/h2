@@ -82,7 +82,8 @@ func printAgentLine(info *message.AgentInfo) {
 	// State label with duration.
 	var stateLabel string
 	if info.State != "" {
-		stateLabel = fmt.Sprintf("%s%s %s\033[0m", stateColor, info.State, info.StateDuration)
+		label := agent.FormatStateLabel(info.State, info.SubState)
+		stateLabel = fmt.Sprintf("%s%s %s\033[0m", stateColor, label, info.StateDuration)
 	} else {
 		stateLabel = fmt.Sprintf("\033[2mup %s\033[0m", info.Uptime)
 	}

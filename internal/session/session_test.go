@@ -33,13 +33,13 @@ func TestStateTransitions_ActiveToIdle(t *testing.T) {
 	// Signal output to ensure we start Active.
 	s.NoteOutput()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != agent.StateActive {
+	if got, _ := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive, got %v", got)
 	}
 
 	// Wait for idle threshold to pass.
 	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != agent.StateIdle {
+	if got, _ := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle after threshold, got %v", got)
 	}
 }
@@ -52,14 +52,14 @@ func TestStateTransitions_IdleToActive(t *testing.T) {
 
 	// Let it go idle.
 	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got := s.State(); got != agent.StateIdle {
+	if got, _ := s.State(); got != agent.StateIdle {
 		t.Fatalf("expected StateIdle, got %v", got)
 	}
 
 	// Signal output — should go back to Active.
 	s.NoteOutput()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != agent.StateActive {
+	if got, _ := s.State(); got != agent.StateActive {
 		t.Fatalf("expected StateActive after output, got %v", got)
 	}
 }
@@ -72,14 +72,14 @@ func TestStateTransitions_Exited(t *testing.T) {
 
 	s.NoteExit()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != agent.StateExited {
+	if got, _ := s.State(); got != agent.StateExited {
 		t.Fatalf("expected StateExited, got %v", got)
 	}
 
 	// Output after exit should NOT change state back — exited is sticky.
 	s.NoteOutput()
 	time.Sleep(50 * time.Millisecond)
-	if got := s.State(); got != agent.StateExited {
+	if got, _ := s.State(); got != agent.StateExited {
 		t.Fatalf("expected StateExited to be sticky after output, got %v", got)
 	}
 }

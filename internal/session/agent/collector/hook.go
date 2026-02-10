@@ -24,7 +24,7 @@ type HookCollector struct {
 	blockedToolName     string
 
 	activityCh  chan string // internal: event names for state derivation
-	stateCh     chan State
+	stateCh     chan StateUpdate
 	stopCh      chan struct{}
 	activityLog *activitylog.Logger
 }
@@ -36,7 +36,7 @@ func NewHookCollector(log *activitylog.Logger) *HookCollector {
 	}
 	c := &HookCollector{
 		activityCh:  make(chan string, 8),
-		stateCh:     make(chan State, 1),
+		stateCh:     make(chan StateUpdate, 1),
 		stopCh:      make(chan struct{}),
 		activityLog: log,
 	}
@@ -44,8 +44,8 @@ func NewHookCollector(log *activitylog.Logger) *HookCollector {
 	return c
 }
 
-// StateCh returns the channel that receives state transitions.
-func (c *HookCollector) StateCh() <-chan State {
+// StateCh returns the channel that receives state updates.
+func (c *HookCollector) StateCh() <-chan StateUpdate {
 	return c.stateCh
 }
 
@@ -136,40 +136,57 @@ type HookState struct {
 	BlockedToolName     string
 }
 
+// SubState derives the agent sub-state from this snapshot.
+func (hs HookState) SubState() SubState {
+	if hs.BlockedOnPermission {
+		return SubStateWaitingForPermission
+	}
+	switch hs.LastEvent {
+	case "UserPromptSubmit", "PostToolUse":
+		return SubStateThinking
+	case "PreToolUse":
+		return SubStateToolUse
+	case "PermissionRequest":
+		return SubStateWaitingForPermission
+	default:
+		return SubStateNone
+	}
+}
+
 // runStateLoop derives active/idle/exited state from hook event names.
 // No idle timer — hooks provide precise signals.
+// Emits on every event because sub-state can change without state changing
+// (e.g. permission_decision → WaitingForPermission).
 func (c *HookCollector) runStateLoop() {
+	currentState := StateInitialized
 	for {
 		select {
 		case eventName := <-c.activityCh:
-			var newState State
-			emit := true
 			switch eventName {
 			case "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest":
-				newState = StateActive
+				currentState = StateActive
 			case "SessionStart", "Stop":
-				newState = StateIdle
+				currentState = StateIdle
 			case "SessionEnd":
-				newState = StateExited
-			default:
-				// permission_decision, blocked_permission, etc.
-				// — no state change.
-				emit = false
+				currentState = StateExited
 			}
-			if emit {
-				c.send(newState)
-			}
+			// Always emit: sub-state may have changed even if state didn't.
+			subState := c.Snapshot().SubState()
+			c.send(StateUpdate{State: currentState, SubState: subState})
 		case <-c.stopCh:
 			return
 		}
 	}
 }
 
-func (c *HookCollector) send(s State) {
+// send delivers the latest StateUpdate using drain-and-replace to ensure
+// the consumer always sees the most recent state.
+func (c *HookCollector) send(su StateUpdate) {
 	select {
-	case c.stateCh <- s:
+	case <-c.stateCh:
 	default:
 	}
+	c.stateCh <- su
 }
 
 // --- Payload extraction helpers ---

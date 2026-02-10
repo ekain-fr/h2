@@ -53,7 +53,7 @@ type Client struct {
 	OnModeChange func(mode InputMode)
 	QueueStatus  func() (int, bool)
 	OtelMetrics  func() (totalTokens int64, totalCostUSD float64, connected bool, port int) // returns OTEL metrics for status bar
-	AgentState   func() (state string, duration string)                                      // returns Agent's derived state
+	AgentState   func() (state string, subState string, duration string)                       // returns Agent's derived state + sub-state
 	HookState    func() (lastToolName string)                                                // returns hook collector state
 	OnSubmit func(text string, priority message.Priority) // called for non-normal input
 	OnDetach func()                                       // called when user selects detach from menu

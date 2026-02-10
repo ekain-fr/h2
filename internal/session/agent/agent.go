@@ -29,6 +29,21 @@ const (
 	IdleThreshold = collector.IdleThreshold
 )
 
+// Re-export SubState type, constants, and StateUpdate from collector package.
+type SubState = collector.SubState
+
+const (
+	SubStateNone                 = collector.SubStateNone
+	SubStateThinking             = collector.SubStateThinking
+	SubStateToolUse              = collector.SubStateToolUse
+	SubStateWaitingForPermission = collector.SubStateWaitingForPermission
+)
+
+type StateUpdate = collector.StateUpdate
+
+// FormatStateLabel re-exports collector.FormatStateLabel.
+var FormatStateLabel = collector.FormatStateLabel
+
 // Agent manages collectors, state derivation, and metrics for a session.
 type Agent struct {
 	agentType AgentType
@@ -57,6 +72,7 @@ type Agent struct {
 	// Layer 2: Derived state
 	mu             sync.Mutex
 	state          State
+	subState       SubState
 	stateChangedAt time.Time
 	stateCh        chan struct{} // closed on state change
 
@@ -135,11 +151,11 @@ func (a *Agent) StartCollectors() error {
 
 // --- State accessors ---
 
-// State returns the current derived state.
-func (a *Agent) State() State {
+// State returns the current derived state and sub-state atomically.
+func (a *Agent) State() (State, SubState) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.state
+	return a.state, a.subState
 }
 
 // StateChanged returns a channel that is closed when the state changes.
@@ -152,11 +168,11 @@ func (a *Agent) StateChanged() <-chan struct{} {
 // WaitForState blocks until the agent reaches the target state or ctx is cancelled.
 func (a *Agent) WaitForState(ctx context.Context, target State) bool {
 	for {
-		a.mu.Lock()
-		if a.state == target {
-			a.mu.Unlock()
+		st, _ := a.State()
+		if st == target {
 			return true
 		}
+		a.mu.Lock()
 		ch := a.stateCh
 		a.mu.Unlock()
 
@@ -177,23 +193,25 @@ func (a *Agent) StateDuration() time.Duration {
 }
 
 // setState updates the state and notifies waiters. Caller must NOT hold mu.
-func (a *Agent) setState(newState State) {
+func (a *Agent) setState(newState State, newSubState SubState) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.setStateLocked(newState)
+	a.setStateLocked(newState, newSubState)
 }
 
-// setStateLocked updates state while mu is already held.
-func (a *Agent) setStateLocked(newState State) {
-	if a.state == newState {
-		return
-	}
+// setStateLocked updates state and sub-state while mu is already held.
+// State-change notifications only fire when State changes (not sub-state alone).
+func (a *Agent) setStateLocked(newState State, newSubState SubState) {
+	stateChanged := a.state != newState
 	prev := a.state
 	a.state = newState
-	a.stateChangedAt = time.Now()
-	close(a.stateCh)
-	a.stateCh = make(chan struct{})
-	a.ActivityLog().StateChange(prev.String(), newState.String())
+	a.subState = newSubState
+	if stateChanged {
+		a.stateChangedAt = time.Now()
+		close(a.stateCh)
+		a.stateCh = make(chan struct{})
+		a.ActivityLog().StateChange(prev.String(), newState.String())
+	}
 }
 
 // --- Signals from Session ---
@@ -209,7 +227,7 @@ func (a *Agent) NoteOutput() {
 // SetExited transitions the agent to the Exited state.
 // Called by Session when the child process exits.
 func (a *Agent) SetExited() {
-	a.setState(StateExited)
+	a.setState(StateExited, SubStateNone)
 }
 
 // --- Internal watchState goroutine ---
@@ -218,10 +236,10 @@ func (a *Agent) SetExited() {
 func (a *Agent) watchState() {
 	for {
 		select {
-		case newState := <-a.primaryCollector.StateCh():
+		case su := <-a.primaryCollector.StateCh():
 			a.mu.Lock()
 			if a.state != StateExited {
-				a.setStateLocked(newState)
+				a.setStateLocked(su.State, su.SubState)
 			}
 			a.mu.Unlock()
 		case <-a.stopCh:

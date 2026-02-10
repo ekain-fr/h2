@@ -60,7 +60,7 @@ func RunHeartbeat(cfg HeartbeatConfig) {
 // waitForIdle blocks until the agent is idle. Returns false if stop is signaled.
 func waitForIdle(a *agent.Agent, stop <-chan struct{}) bool {
 	for {
-		if a.State() == agent.StateIdle {
+		if st, _ := a.State(); st == agent.StateIdle {
 			return true
 		}
 		select {
@@ -79,13 +79,13 @@ func waitForTimer(timer *time.Timer, a *agent.Agent, stop <-chan struct{}) bool 
 		select {
 		case <-timer.C:
 			// Timer fired — verify agent is still idle.
-			if a.State() == agent.StateIdle {
+			if st, _ := a.State(); st == agent.StateIdle {
 				return true
 			}
 			return false
 		case <-a.StateChanged():
 			// State changed — if no longer idle, cancel.
-			if a.State() != agent.StateIdle {
+			if st, _ := a.State(); st != agent.StateIdle {
 				return false
 			}
 			// Still idle (e.g. active→idle transition); keep waiting.

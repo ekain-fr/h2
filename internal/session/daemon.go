@@ -105,13 +105,15 @@ func RunDaemon(name, sessionID, command string, args []string, roleName, session
 func (d *Daemon) AgentInfo() *message.AgentInfo {
 	s := d.Session
 	uptime := time.Since(d.StartTime)
+	st, sub := s.State()
 	info := &message.AgentInfo{
 		Name:          s.Name,
 		Command:       s.Command,
 		SessionID:     s.SessionID,
 		RoleName:      s.RoleName,
 		Uptime:        virtualterminal.FormatIdleDuration(uptime),
-		State:         s.State().String(),
+		State:         st.String(),
+		SubState:      sub.String(),
 		StateDuration: virtualterminal.FormatIdleDuration(s.StateDuration()),
 		QueuedCount:   s.Queue.PendingCount(),
 	}

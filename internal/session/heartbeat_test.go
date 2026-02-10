@@ -80,7 +80,7 @@ func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
 
 	// Wait for agent to go idle.
 	deadline := time.After(5 * time.Second)
-	for a.State() != agent.StateIdle {
+	for st, _ := a.State(); st != agent.StateIdle; st, _ = a.State() {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for idle")
@@ -122,7 +122,7 @@ func TestHeartbeat_ConditionGates(t *testing.T) {
 
 	// Wait for idle + timeout + buffer.
 	deadline := time.After(5 * time.Second)
-	for a.State() != agent.StateIdle {
+	for st, _ := a.State(); st != agent.StateIdle; st, _ = a.State() {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for idle")
