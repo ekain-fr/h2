@@ -12,7 +12,8 @@ func TestParseAgentPrefix(t *testing.T) {
 	}{
 		{"running-deer: check build", "running-deer", "check build"},
 		{"agent_1: hello", "agent_1", "hello"},
-		{"MyAgent: test", "MyAgent", "test"},
+		{"MyAgent: test", "myagent", "test"},
+		{"Concierge: hello", "concierge", "hello"},
 		{"no prefix here", "", "no prefix here"},
 		{"", "", ""},
 		{"agent: body: with: colons", "agent", "body: with: colons"},

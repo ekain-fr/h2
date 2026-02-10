@@ -53,13 +53,14 @@ func FormatAgentTag(agent, text string) string {
 var agentPrefixRe = regexp.MustCompile(`^([a-zA-Z0-9_-]+):\s*(.*)$`)
 
 // ParseAgentPrefix extracts an "agent-name: body" prefix from text.
+// The agent name is lowercased to match socket naming conventions.
 // Returns empty agent if no valid prefix found.
 func ParseAgentPrefix(text string) (agent, body string) {
 	m := agentPrefixRe.FindStringSubmatch(text)
 	if m == nil {
 		return "", text
 	}
-	return m[1], m[2]
+	return strings.ToLower(m[1]), m[2]
 }
 
 var envelopeRe = regexp.MustCompile(`^\[(URGENT )?h2 message from: [^\]]+\]\s*`)
