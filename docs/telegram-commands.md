@@ -55,7 +55,7 @@ type UserConfig struct {
 }
 ```
 
-The whitelist contains bare command names (not paths). Each entry is validated to contain no `/`, `..`, or shell metacharacters. The command is resolved via `exec.LookPath` at execution time.
+The whitelist contains bare command names (not paths). Each entry must match `^[a-zA-Z0-9_-]+$` (same character class as agent names). Empty strings are rejected. The command is resolved via `exec.LookPath` at execution time.
 
 ### 2. Telegram Message Parsing
 
@@ -76,7 +76,10 @@ func ParseSlashCommand(text string, allowed []string) (command, args string) {
     // Split on first space: "/h2 list --json" → "h2", "list --json"
     rest := text[1:] // strip leading /
     parts := strings.SplitN(rest, " ", 2)
-    cmd := parts[0]
+    cmd := strings.TrimSpace(parts[0])
+    if cmd == "" {
+        return "", ""
+    }
     for _, a := range allowed {
         if cmd == a {
             if len(parts) > 1 {
@@ -121,15 +124,15 @@ func ExecCommand(command, args string) string {
             exitCode = exitErr.ExitCode()
         }
         if ctx.Err() == context.DeadlineExceeded {
-            return fmt.Sprintf("ERROR (timeout after 30s):\n%s", result)
+            return truncateOutput(fmt.Sprintf("ERROR (timeout after 30s):\n%s", result))
         }
-        return fmt.Sprintf("ERROR (exit %d):\n%s", exitCode, result)
+        return truncateOutput(fmt.Sprintf("ERROR (exit %d):\n%s", exitCode, result))
     }
 
     if result == "" {
         return "(no output)"
     }
-    return result
+    return truncateOutput(result)
 }
 ```
 
@@ -161,7 +164,15 @@ func New(bridges []bridge.Bridge, concierge, socketDir, user string, allowedComm
 }
 
 func (s *Service) handleInbound(targetAgent, body string) {
-    // Check for slash commands before agent routing.
+    // If an explicit agent prefix was parsed, route to that agent.
+    // This ensures "concierge: /h2 list" sends the text "/h2 list" to
+    // the concierge rather than executing it as a command.
+    if targetAgent != "" {
+        // ... existing agent routing logic ...
+        return
+    }
+
+    // Check for slash commands before default-target agent routing.
     cmd, args := bridge.ParseSlashCommand(body, s.allowedCommands)
     if cmd != "" {
         log.Printf("bridge: executing command /%s %s", cmd, args)
@@ -170,7 +181,7 @@ func (s *Service) handleInbound(targetAgent, body string) {
         return
     }
 
-    // ... existing agent routing logic unchanged ...
+    // ... existing default-target agent routing logic unchanged ...
 }
 ```
 
@@ -215,12 +226,16 @@ Alternatively, since the bridge daemon already loads config, it can read `allowe
 - **Whitelist only**: Only explicitly listed command names are executed. Default is empty (no commands allowed).
 - **No shell**: `exec.Command` is used directly, never through a shell interpreter. No shell expansion, no pipes, no redirects.
 - **Argument splitting**: Go's shlex library handles quoting but doesn't interpret shell operators.
-- **Command name validation**: Config loading validates that entries in `allowed_commands` are simple command names (no `/`, `..`, spaces, or shell metacharacters).
+- **Command name validation**: Config loading validates that entries in `allowed_commands` match `^[a-zA-Z0-9_-]+$`. Empty strings are rejected.
 - **LookPath resolution**: Commands are found via PATH, same as typing them in a terminal.
 - **Timeout**: 30s hard timeout prevents hanging commands from blocking the bridge.
 - **Output size**: Truncated to fit Telegram's message limit.
 - **No stdin**: Commands get no stdin (nil).
-- **Working directory**: Commands run in the h2 dir (from `ConfigDir()`), same environment as the bridge daemon.
+- **Working directory**: Commands run in the h2 dir (from `ConfigDir()`), same environment as the bridge daemon. This means `h2` subcommands will resolve the h2 dir correctly. Commands that are project-dir-sensitive (e.g. git) would operate in the h2 dir, not a project root — acceptable for the intended `h2`/`bd` use case.
+
+### Known Limitations (v1)
+
+- **Reply broadcast**: Command output is sent to all configured Sender bridges, not just the one that originated the message. This matches existing `replyError` behavior. In practice most setups have a single platform bridge (Telegram). Supporting per-bridge reply routing would require threading bridge identity through `InboundHandler`, which is a larger refactor deferred to v2.
 
 ### 8. Output Truncation
 
@@ -264,9 +279,10 @@ func truncateOutput(s string) string {
 3. `/h2` alone (no args) with `["h2"]` → `("h2", "")`
 4. `/notallowed foo` with `["h2"]` → `("", "")`
 5. Plain text `hello` → `("", "")`
-6. Agent-prefixed `concierge: /h2 list` — will have been parsed by `ParseAgentPrefix` first, so this tests what `handleInbound` sees: targetAgent="concierge", body="/h2 list". The slash command check still fires on the body.
+6. Agent-prefixed `concierge: /h2 list` — will have been parsed by `ParseAgentPrefix` first, so body="/h2 list" would match. This is fine — `handleInbound` guards with `targetAgent != ""` check first.
 7. Empty allowed list → always `("", "")`
 8. `/H2 list` (case sensitivity) → `("", "")` (case-sensitive match)
+9. `/h2   ` (trailing whitespace, no args) → `("h2", "")` (cmd trimmed)
 
 **`exec_test.go` — ExecCommand:**
 1. Successful command: `ExecCommand("echo", "hello")` → `"hello"`
@@ -287,13 +303,15 @@ func truncateOutput(s string) string {
 1. `allowed_commands: ["h2", "bd"]` → valid
 2. `allowed_commands: ["/usr/bin/h2"]` → error (contains `/`)
 3. `allowed_commands: ["rm -rf"]` → error (contains space)
-4. `allowed_commands: ["h2;echo"]` → error (contains shell metachar)
+4. `allowed_commands: ["h2;echo"]` → error (contains `;`)
+5. `allowed_commands: [""]` → error (empty string)
 
 ### Integration/E2E Tests
 
 1. **End-to-end with mock Telegram**: Use the existing `httptest.Server` pattern from Telegram tests. Send a Telegram update with `/h2 version`, verify the bot replies with version output.
 2. **Interleaving**: Send `/h2 list`, then a regular message, then `/bd list`. Verify commands get replies and the regular message routes to an agent.
 3. **Config reload**: Start bridge with empty `allowed_commands`, verify `/h2` routes to agent. Restart with `["h2"]`, verify `/h2` executes.
+4. **Concurrent commands**: Send `/h2 list` and `/bd list` nearly simultaneously. Verify both get replies with no races in the reply path (run with `-race` flag).
 
 ## Alternatives Considered
 
