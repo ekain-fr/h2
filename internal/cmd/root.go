@@ -33,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 		newPeekCmd(),
 		newStopCmd(),
 		newVersionCmd(),
+		newInitCmd(),
 	)
 
 	return rootCmd
