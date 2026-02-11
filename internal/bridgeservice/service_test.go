@@ -478,6 +478,52 @@ func TestSocketListener(t *testing.T) {
 	<-errCh
 }
 
+// --- Stop request test ---
+
+func TestStopRequest_ShutdownService(t *testing.T) {
+	tmpDir := shortTempDir(t)
+	sender := &mockSender{name: "test"}
+	svc := New([]bridge.Bridge{sender}, "", tmpDir, "alice")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- svc.Run(ctx) }()
+
+	sockPath := filepath.Join(tmpDir, socketdir.Format(socketdir.TypeBridge, "alice"))
+	waitForSocket(t, sockPath)
+
+	// Send stop request.
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if err := message.SendRequest(conn, &message.Request{Type: "stop"}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := message.ReadResponse(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Errorf("expected OK response, got error: %s", resp.Error)
+	}
+
+	// Run should return because the stop cancelled the context.
+	if err := <-errCh; err != nil {
+		t.Errorf("unexpected error from Run: %v", err)
+	}
+
+	// Socket should be cleaned up by Run's deferred cleanup.
+	if _, err := os.Stat(sockPath); err == nil {
+		t.Error("expected socket to be removed after stop")
+	}
+}
+
 // --- Run lifecycle test ---
 
 func TestRunStartsAndStopsReceivers(t *testing.T) {

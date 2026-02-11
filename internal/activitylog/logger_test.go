@@ -138,7 +138,7 @@ func TestDisabledLoggerIsNoop(t *testing.T) {
 	l.PermissionDecision("sess", "Bash", "allow", "ok")
 	l.OtelConnected("/v1/logs")
 	l.StateChange("active", "idle")
-	l.SessionSummary(100, 200, 0.01, 1, 2, 0, 0, nil)
+	l.SessionSummary(SessionSummaryData{InputTokens: 100, OutputTokens: 200, CostUSD: 0.01, APIRequests: 1, ToolCalls: 2})
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("expected no file to be created when disabled")
@@ -152,7 +152,7 @@ func TestNopLoggerIsNoop(t *testing.T) {
 	l.PermissionDecision("sess", "Bash", "allow", "ok")
 	l.OtelConnected("/v1/logs")
 	l.StateChange("active", "idle")
-	l.SessionSummary(100, 200, 0.01, 1, 2, 0, 0, nil)
+	l.SessionSummary(SessionSummaryData{InputTokens: 100, OutputTokens: 200, CostUSD: 0.01, APIRequests: 1, ToolCalls: 2})
 	l.Close()
 }
 
@@ -195,7 +195,25 @@ func TestSessionSummary(t *testing.T) {
 	l := New(true, path, "agent", "sess")
 	defer l.Close()
 
-	l.SessionSummary(5000, 3000, 0.42, 10, 25, 42, 7, map[string]int64{"Bash": 15, "Read": 8})
+	l.SessionSummary(SessionSummaryData{
+		InputTokens:  5000,
+		OutputTokens: 3000,
+		TotalTokens:  8000,
+		CostUSD:      0.42,
+		APIRequests:  10,
+		ToolCalls:    25,
+		LinesAdded:   42,
+		LinesRemoved: 7,
+		ToolCounts:   map[string]int64{"Bash": 15, "Read": 8},
+		ActiveTimeHrs: 1.5,
+		ModelCosts:    map[string]float64{"claude-sonnet": 0.30, "claude-haiku": 0.12},
+		ModelTokens:   map[string]map[string]int64{"claude-sonnet": {"input": 3000, "output": 2000}},
+		ToolUseCount:  20,
+		Uptime:        "5m30s",
+		GitFilesChanged: 3,
+		GitLinesAdded:   100,
+		GitLinesRemoved: 50,
+	})
 
 	lines := readLines(t, path)
 	if len(lines) != 1 {
@@ -203,15 +221,24 @@ func TestSessionSummary(t *testing.T) {
 	}
 
 	var e struct {
-		Event        string           `json:"event"`
-		InputTokens  int64            `json:"input_tokens"`
-		OutputTokens int64            `json:"output_tokens"`
-		CostUSD      float64          `json:"cost_usd"`
-		APIRequests  int64            `json:"api_requests"`
-		ToolCalls    int64            `json:"tool_calls"`
-		LinesAdded   int64            `json:"lines_added"`
-		LinesRemoved int64            `json:"lines_removed"`
-		ToolCounts   map[string]int64 `json:"tool_counts"`
+		Event           string                      `json:"event"`
+		InputTokens     int64                       `json:"input_tokens"`
+		OutputTokens    int64                       `json:"output_tokens"`
+		TotalTokens     int64                       `json:"total_tokens"`
+		CostUSD         float64                     `json:"cost_usd"`
+		APIRequests     int64                       `json:"api_requests"`
+		ToolCalls       int64                       `json:"tool_calls"`
+		LinesAdded      int64                       `json:"lines_added"`
+		LinesRemoved    int64                       `json:"lines_removed"`
+		ToolCounts      map[string]int64            `json:"tool_counts"`
+		ActiveTimeHrs   float64                     `json:"active_time_hrs"`
+		ModelCosts      map[string]float64          `json:"model_costs"`
+		ModelTokens     map[string]map[string]int64 `json:"model_tokens"`
+		ToolUseCount    int64                       `json:"tool_use_count"`
+		Uptime          string                      `json:"uptime"`
+		GitFilesChanged int                         `json:"git_files_changed"`
+		GitLinesAdded   int64                       `json:"git_lines_added"`
+		GitLinesRemoved int64                       `json:"git_lines_removed"`
 	}
 	if err := json.Unmarshal([]byte(lines[0]), &e); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -224,6 +251,9 @@ func TestSessionSummary(t *testing.T) {
 	}
 	if e.OutputTokens != 3000 {
 		t.Errorf("output_tokens = %d, want 3000", e.OutputTokens)
+	}
+	if e.TotalTokens != 8000 {
+		t.Errorf("total_tokens = %d, want 8000", e.TotalTokens)
 	}
 	if e.CostUSD != 0.42 {
 		t.Errorf("cost_usd = %f, want 0.42", e.CostUSD)
@@ -242,6 +272,57 @@ func TestSessionSummary(t *testing.T) {
 	}
 	if e.ToolCounts["Bash"] != 15 {
 		t.Errorf("tool_counts[Bash] = %d, want 15", e.ToolCounts["Bash"])
+	}
+	if e.ActiveTimeHrs != 1.5 {
+		t.Errorf("active_time_hrs = %f, want 1.5", e.ActiveTimeHrs)
+	}
+	if e.ModelCosts["claude-sonnet"] != 0.30 {
+		t.Errorf("model_costs[claude-sonnet] = %f, want 0.30", e.ModelCosts["claude-sonnet"])
+	}
+	if e.ModelTokens["claude-sonnet"]["input"] != 3000 {
+		t.Errorf("model_tokens[claude-sonnet][input] = %d, want 3000", e.ModelTokens["claude-sonnet"]["input"])
+	}
+	if e.ToolUseCount != 20 {
+		t.Errorf("tool_use_count = %d, want 20", e.ToolUseCount)
+	}
+	if e.Uptime != "5m30s" {
+		t.Errorf("uptime = %q, want %q", e.Uptime, "5m30s")
+	}
+	if e.GitFilesChanged != 3 {
+		t.Errorf("git_files_changed = %d, want 3", e.GitFilesChanged)
+	}
+	if e.GitLinesAdded != 100 {
+		t.Errorf("git_lines_added = %d, want 100", e.GitLinesAdded)
+	}
+	if e.GitLinesRemoved != 50 {
+		t.Errorf("git_lines_removed = %d, want 50", e.GitLinesRemoved)
+	}
+}
+
+func TestSessionSummaryZeroValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.log")
+	l := New(true, path, "agent", "sess")
+	defer l.Close()
+
+	l.SessionSummary(SessionSummaryData{})
+
+	lines := readLines(t, path)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+
+	// Verify all fields are present even with zero values (no omitempty).
+	line := lines[0]
+	for _, field := range []string{
+		"input_tokens", "output_tokens", "total_tokens", "cost_usd",
+		"api_requests", "tool_calls", "lines_added", "lines_removed",
+		"tool_counts", "active_time_hrs", "model_costs", "model_tokens",
+		"tool_use_count", "uptime", "git_files_changed", "git_lines_added",
+		"git_lines_removed",
+	} {
+		if !strings.Contains(line, `"`+field+`"`) {
+			t.Errorf("expected field %q to be present in output", field)
+		}
 	}
 }
 

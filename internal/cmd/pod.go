@@ -1,0 +1,199 @@
+package cmd
+
+import (
+	"fmt"
+	"net"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"h2/internal/config"
+	"h2/internal/session/message"
+	"h2/internal/socketdir"
+)
+
+func newPodCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pod",
+		Short: "Manage agent pods",
+	}
+
+	cmd.AddCommand(newPodLaunchCmd())
+	cmd.AddCommand(newPodStopCmd())
+	cmd.AddCommand(newPodListCmd())
+	return cmd
+}
+
+func newPodLaunchCmd() *cobra.Command {
+	var podName string
+
+	cmd := &cobra.Command{
+		Use:   "launch <template>",
+		Short: "Launch a pod from a template",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			templateName := args[0]
+
+			tmpl, err := config.LoadPodTemplate(templateName)
+			if err != nil {
+				return fmt.Errorf("load template %q: %w", templateName, err)
+			}
+
+			// Use --pod flag, or template's pod_name, or template file name.
+			pod := podName
+			if pod == "" {
+				pod = tmpl.PodName
+			}
+			if pod == "" {
+				pod = templateName
+			}
+
+			if err := config.ValidatePodName(pod); err != nil {
+				return err
+			}
+
+			if len(tmpl.Agents) == 0 {
+				return fmt.Errorf("template %q has no agents", templateName)
+			}
+
+			// Build a set of already-running agents in this pod.
+			running := podRunningAgents(pod)
+
+			var started, skipped int
+			for _, agent := range tmpl.Agents {
+				if running[agent.Name] {
+					fmt.Fprintf(os.Stderr, "  %s already running\n", agent.Name)
+					skipped++
+					continue
+				}
+
+				roleName := agent.Role
+				if roleName == "" {
+					roleName = "default"
+				}
+
+				role, err := config.LoadPodRole(roleName)
+				if err != nil {
+					return fmt.Errorf("load role %q for agent %q: %w", roleName, agent.Name, err)
+				}
+
+				if err := setupAndForkAgentQuiet(agent.Name, role, pod, nil); err != nil {
+					return fmt.Errorf("start agent %q: %w", agent.Name, err)
+				}
+				fmt.Fprintf(os.Stderr, "  %s started\n", agent.Name)
+				started++
+			}
+
+			// Summary line.
+			switch {
+			case skipped == 0:
+				fmt.Fprintf(os.Stderr, "Pod %q launched with %d agents\n", pod, started)
+			case started == 0:
+				fmt.Fprintf(os.Stderr, "Pod %q: all %d agents already running\n", pod, skipped)
+			default:
+				fmt.Fprintf(os.Stderr, "Pod %q: %d started, %d already running\n", pod, started, skipped)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&podName, "pod", "", "Override pod name (default: template's pod_name or template name)")
+
+	return cmd
+}
+
+func newPodStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <pod-name>",
+		Short: "Stop all agents in a pod",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			podName := args[0]
+
+			entries, err := socketdir.ListByType(socketdir.TypeAgent)
+			if err != nil {
+				return err
+			}
+
+			stopped := 0
+			for _, e := range entries {
+				info := queryAgent(e.Path)
+				if info == nil || info.Pod != podName {
+					continue
+				}
+
+				conn, err := net.Dial("unix", e.Path)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: cannot connect to %q: %v\n", e.Name, err)
+					continue
+				}
+
+				if err := message.SendRequest(conn, &message.Request{Type: "stop"}); err != nil {
+					conn.Close()
+					fmt.Fprintf(os.Stderr, "Warning: cannot stop %q: %v\n", e.Name, err)
+					continue
+				}
+
+				resp, err := message.ReadResponse(conn)
+				conn.Close()
+				if err != nil || !resp.OK {
+					fmt.Fprintf(os.Stderr, "Warning: stop failed for %q\n", e.Name)
+					continue
+				}
+
+				fmt.Printf("Stopped %s\n", e.Name)
+				stopped++
+			}
+
+			if stopped == 0 {
+				fmt.Printf("No agents found in pod %q\n", podName)
+			} else {
+				fmt.Printf("Stopped %d agents in pod %q\n", stopped, podName)
+			}
+			return nil
+		},
+	}
+}
+
+// podRunningAgents returns a set of agent names currently running in the given pod.
+func podRunningAgents(pod string) map[string]bool {
+	running := make(map[string]bool)
+	entries, err := socketdir.ListByType(socketdir.TypeAgent)
+	if err != nil {
+		return running
+	}
+	for _, e := range entries {
+		info := queryAgent(e.Path)
+		if info != nil && info.Pod == pod {
+			running[info.Name] = true
+		}
+	}
+	return running
+}
+
+func newPodListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List available pod templates",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			templates, err := config.ListPodTemplates()
+			if err != nil {
+				return err
+			}
+
+			if len(templates) == 0 {
+				fmt.Printf("No pod templates found in %s\n", config.PodTemplatesDir())
+				return nil
+			}
+
+			for _, t := range templates {
+				name := t.PodName
+				if name == "" {
+					name = "(unnamed)"
+				}
+				fmt.Printf("%-20s %d agents\n", name, len(t.Agents))
+			}
+			return nil
+		},
+	}
+}
