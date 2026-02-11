@@ -119,19 +119,36 @@ type SessionMetadata struct {
 
 ### 1.6 Modified: `internal/session/daemon.go` — ForkDaemon
 
-New parameters threaded through:
+Refactor from many positional args to an options struct:
 
+**Current signature** (8 positional args):
 ```go
 func ForkDaemon(name, sessionID, command string, args []string,
-    roleName, sessionDir, claudeConfigDir string,
-    heartbeat DaemonHeartbeat,
-    cwd string,    // NEW: working directory for the child process
-    pod string,    // NEW: pod name (set as H2_POD env var)
-) error
+    roleName, sessionDir, claudeConfigDir string, heartbeat DaemonHeartbeat) error
 ```
 
-The `cwd` is set via `cmd.Dir = cwd` on the exec.Command before starting.
-Environment is built explicitly: `cmd.Env = append(os.Environ(), "H2_POD="+pod, "H2_DIR="+resolvedDir)`. Note: once `cmd.Env` is set, Go no longer inherits the parent env implicitly, so `os.Environ()` must be included as the base.
+**New signature** with opts struct:
+```go
+type ForkDaemonOpts struct {
+    Name            string
+    SessionID       string
+    Command         string
+    Args            []string
+    RoleName        string
+    SessionDir      string
+    ClaudeConfigDir string
+    Heartbeat       DaemonHeartbeat
+    CWD             string // NEW: working directory for the child process
+    Pod             string // NEW: pod name (set as H2_POD env var)
+}
+
+func ForkDaemon(opts ForkDaemonOpts) error
+```
+
+`RunDaemon` should be refactored similarly since it mirrors the same parameters.
+
+`opts.CWD` is set via `cmd.Dir` on the exec.Command before starting.
+Environment is built explicitly: `cmd.Env = append(os.Environ(), "H2_POD="+opts.Pod, "H2_DIR="+resolvedDir)`. Note: once `cmd.Env` is set, Go no longer inherits the parent env implicitly, so `os.Environ()` must be included as the base.
 
 ### 1.7 Modified: `internal/session/message/protocol.go` — AgentInfo
 
@@ -323,8 +340,8 @@ sequenceDiagram
     end
 
     Setup->>Config: SetupSessionDir(name, role)
-    Setup->>Fork: ForkDaemon(..., cwd, pod)
-    Fork->>Daemon: exec h2 _daemon (with H2_POD=P, Dir=cwd)
+    Setup->>Fork: ForkDaemon(ForkDaemonOpts{..., CWD, Pod})
+    Fork->>Daemon: exec h2 _daemon (with H2_POD=P, Dir=CWD)
     Fork-->>Setup: socket ready
     Setup->>User: attach or print detach message
 ```
