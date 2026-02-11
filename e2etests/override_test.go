@@ -1,6 +1,7 @@
 package e2etests
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,35 +35,49 @@ working_dir: /original/path
 	}
 }
 
-// §6.2 Override a nested bool field (worktree.enabled)
-func TestOverride_NestedBoolField(t *testing.T) {
+// §6.2 Override a nested string field (worktree.project_dir)
+func TestOverride_NestedStringField_Worktree(t *testing.T) {
 	h2Dir := createTestH2Dir(t)
 	createGitRepo(t, h2Dir, "projects/myrepo")
 
-	// Role does NOT have worktree enabled — override will enable it.
+	// Role has worktree with project_dir — override branch_from.
 	createRole(t, h2Dir, "override-wt", `
 name: override-wt
 agent_type: "true"
-instructions: test override nested bool
-working_dir: projects/myrepo
+instructions: test override nested string
+worktree:
+  project_dir: projects/myrepo
+  name: test-override-wt
+  branch_from: main
 `)
 
 	result := runH2(t, h2Dir, "run", "--role", "override-wt",
 		"--name", "test-override-wt", "--detach",
-		"--override", "worktree.enabled=true",
-		"--override", "worktree.branch_from=main")
+		"--override", "worktree.use_detached_head=true")
 	if result.ExitCode != 0 {
 		t.Fatalf("h2 run failed: exit=%d stderr=%s stdout=%s", result.ExitCode, result.Stderr, result.Stdout)
 	}
 	t.Cleanup(func() { stopAgent(t, h2Dir, "test-override-wt") })
 
-	// Verify worktree was created (override took effect).
+	// Verify worktree was created with detached head (override took effect).
 	worktreePath := filepath.Join(h2Dir, "worktrees", "test-override-wt")
 	meta := readSessionMetadata(t, h2Dir, "test-override-wt")
 	wantCWD, _ := filepath.EvalSymlinks(worktreePath)
 	gotCWD, _ := filepath.EvalSymlinks(meta.CWD)
 	if gotCWD != wantCWD {
 		t.Errorf("session CWD = %q, want worktree %q", meta.CWD, worktreePath)
+	}
+
+	// Verify HEAD is detached.
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch != "" {
+		t.Errorf("expected detached HEAD (empty branch), got %q", branch)
 	}
 }
 
@@ -102,7 +117,7 @@ instructions: test type mismatch
 
 	result := runH2(t, h2Dir, "run", "--role", "override-type",
 		"--name", "test-type-err", "--detach",
-		"--override", "worktree.enabled=notabool")
+		"--override", "worktree.use_detached_head=notabool")
 	if result.ExitCode == 0 {
 		t.Cleanup(func() { stopAgent(t, h2Dir, "test-type-err") })
 		t.Fatal("expected h2 run to fail for type mismatch")

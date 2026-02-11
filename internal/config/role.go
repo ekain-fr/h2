@@ -24,9 +24,13 @@ func (k *HeartbeatConfig) ParseIdleTimeout() (time.Duration, error) {
 }
 
 // WorktreeConfig defines git worktree settings for an agent.
+// Presence of this block implies worktree is enabled (no separate "enabled" flag).
+// Mutually exclusive with Role.WorkingDir.
 type WorktreeConfig struct {
-	Enabled         bool   `yaml:"enabled"`
+	ProjectDir      string `yaml:"project_dir"`                 // required: source git repo
+	Name            string `yaml:"name"`                        // required: worktree dir name under <h2-dir>/worktrees/
 	BranchFrom      string `yaml:"branch_from,omitempty"`       // default: "main"
+	BranchName      string `yaml:"branch_name,omitempty"`       // default: Name
 	UseDetachedHead bool   `yaml:"use_detached_head,omitempty"` // default: false
 }
 
@@ -36,6 +40,43 @@ func (w *WorktreeConfig) GetBranchFrom() string {
 		return w.BranchFrom
 	}
 	return "main"
+}
+
+// GetBranchName returns the branch name for the worktree, defaulting to Name.
+func (w *WorktreeConfig) GetBranchName() string {
+	if w.BranchName != "" {
+		return w.BranchName
+	}
+	return w.Name
+}
+
+// ResolveProjectDir returns the absolute path for the worktree's source git repo.
+// Relative paths are resolved against the h2 dir. Absolute paths are used as-is.
+func (w *WorktreeConfig) ResolveProjectDir() (string, error) {
+	dir := w.ProjectDir
+	if dir == "" {
+		return "", fmt.Errorf("worktree.project_dir is required")
+	}
+	if filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	// Relative path: resolve against h2 dir.
+	h2Dir, err := ResolveDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve h2 dir for worktree.project_dir: %w", err)
+	}
+	return filepath.Join(h2Dir, dir), nil
+}
+
+// Validate checks that the WorktreeConfig has required fields.
+func (w *WorktreeConfig) Validate() error {
+	if w.ProjectDir == "" {
+		return fmt.Errorf("worktree.project_dir is required")
+	}
+	if w.Name == "" {
+		return fmt.Errorf("worktree.name is required")
+	}
+	return nil
 }
 
 // WorktreesDir returns <h2-dir>/worktrees/.
@@ -236,6 +277,15 @@ func (r *Role) Validate() error {
 	}
 	if r.Instructions == "" {
 		return fmt.Errorf("instructions are required")
+	}
+	// working_dir and worktree are mutually exclusive (working_dir "." or empty is allowed).
+	if r.Worktree != nil && r.WorkingDir != "" && r.WorkingDir != "." {
+		return fmt.Errorf("working_dir and worktree are mutually exclusive; use worktree.project_dir instead")
+	}
+	if r.Worktree != nil {
+		if err := r.Worktree.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

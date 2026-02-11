@@ -78,7 +78,7 @@ This means `socketdir` gains an import on `config`. Currently it has no internal
 
 ### 1.4 Modified: `internal/config/role.go` — Role struct
 
-New fields added:
+Fields:
 
 ```go
 type Role struct {
@@ -89,19 +89,24 @@ type Role struct {
 }
 
 type WorktreeConfig struct {
-    Enabled         bool   `yaml:"enabled"`
-    BranchFrom      string `yaml:"branch_from,omitempty"`      // default: "main"
+    ProjectDir      string `yaml:"project_dir"`                 // required: source git repo
+    Name            string `yaml:"name"`                        // required: worktree dir name
+    BranchFrom      string `yaml:"branch_from,omitempty"`       // default: "main"
+    BranchName      string `yaml:"branch_name,omitempty"`       // default: Name
     UseDetachedHead bool   `yaml:"use_detached_head,omitempty"` // default: false
 }
 ```
 
-New method:
+`working_dir` and `worktree` are mutually exclusive (validated in `Role.Validate()`).
+
+Methods:
 
 ```go
-// ResolveWorkingDir returns the absolute path for the agent's working directory.
-// "." is interpreted as invocationCWD. Relative paths are resolved against
-// the h2 dir. Absolute paths are used as-is.
 func (r *Role) ResolveWorkingDir(invocationCWD string) (string, error)
+func (w *WorktreeConfig) GetBranchFrom() string      // defaults to "main"
+func (w *WorktreeConfig) GetBranchName() string       // defaults to Name
+func (w *WorktreeConfig) ResolveProjectDir() (string, error) // resolves relative to h2 dir
+func (w *WorktreeConfig) Validate() error             // requires ProjectDir and Name
 ```
 
 ### 1.5 Modified: `internal/config/session_dir.go` — SessionMetadata
@@ -219,11 +224,11 @@ import "h2/internal/config"
 
 // CreateWorktree creates a git worktree for an agent.
 // Returns the absolute path to the new worktree.
-func CreateWorktree(agentName, repoDir string, cfg *config.WorktreeConfig) (string, error)
+func CreateWorktree(cfg *config.WorktreeConfig) (string, error)
 ```
 
-Implementation calls `git worktree add` with appropriate flags:
-- Default: `git worktree add -b <agent-name> <worktree-path> <branch_from>`
+Implementation uses `cfg.ResolveProjectDir()` for the repo, `cfg.Name` for the worktree directory, and `cfg.GetBranchName()` for the branch. Calls `git worktree add` with appropriate flags:
+- Default: `git worktree add -b <branch_name> <worktree-path> <branch_from>`
 - Detached: `git worktree add --detach <worktree-path> <branch_from>`
 - Reuse: if worktree path already exists with a valid `.git` file, skip creation and return the existing path.
 
@@ -342,19 +347,19 @@ sequenceDiagram
     participant Fork as session.ForkDaemon
     participant Daemon as h2 _daemon
 
-    User->>RunCmd: h2 run --role X --pod P --override worktree.enabled=true
+    User->>RunCmd: h2 run --role X --pod P --override worktree.project_dir=/repo
     RunCmd->>Config: LoadRole("X") or LoadPodRole("X")
     Config-->>RunCmd: *Role
     RunCmd->>Config: ApplyOverrides(role, overrides)
     RunCmd->>Setup: setupAndForkAgent(name, role, detach, pod)
 
-    Setup->>Config: role.ResolveWorkingDir(cwd)
-    Config-->>Setup: absoluteCWD
-
-    alt worktree.enabled
-        Setup->>Worktree: CreateWorktree(name, absoluteCWD, worktreeCfg)
+    alt role.Worktree != nil
+        Setup->>Worktree: CreateWorktree(worktreeCfg)
         Worktree-->>Setup: worktreePath
         Note over Setup: CWD = worktreePath
+    else no worktree
+        Setup->>Config: role.ResolveWorkingDir(cwd)
+        Config-->>Setup: absoluteCWD
     end
 
     Setup->>Config: SetupSessionDir(name, role)
@@ -432,9 +437,11 @@ heartbeat:
   condition: ""
 
 worktree:
-  enabled: false                         # NEW
-  branch_from: main                      # NEW
-  use_detached_head: false               # NEW
+  project_dir: projects/my-app           # required: source git repo
+  name: feature-builder                  # required: worktree dir name
+  branch_from: main                      # optional, default "main"
+  branch_name: feature/my-feature        # optional, default = name
+  use_detached_head: false               # optional, default false
 
 hooks: {}                                # passed through to settings.json
 settings: {}                             # extra settings.json keys
@@ -553,8 +560,10 @@ The override mechanism maps dot-notation keys to struct fields via YAML tags:
 | `agent_type` | `Role.AgentType` | `string` |
 | `model` | `Role.Model` | `string` |
 | `claude_config_dir` | `Role.ClaudeConfigDir` | `string` |
-| `worktree.enabled` | `Role.Worktree.Enabled` | `bool` |
+| `worktree.project_dir` | `Role.Worktree.ProjectDir` | `string` |
+| `worktree.name` | `Role.Worktree.Name` | `string` |
 | `worktree.branch_from` | `Role.Worktree.BranchFrom` | `string` |
+| `worktree.branch_name` | `Role.Worktree.BranchName` | `string` |
 | `worktree.use_detached_head` | `Role.Worktree.UseDetachedHead` | `bool` |
 | `heartbeat.idle_timeout` | `Role.Heartbeat.IdleTimeout` | `string` |
 | `heartbeat.message` | `Role.Heartbeat.Message` | `string` |
@@ -626,10 +635,10 @@ No new socket types, no pod registry -- just an env var and a field on the statu
 
 ```bash
 # Default mode (new branch):
-git -C <repo-dir> worktree add -b <agent-name> <h2-dir>/worktrees/<agent-name> <branch-from>
+git -C <project-dir> worktree add -b <branch-name> <h2-dir>/worktrees/<name> <branch-from>
 
 # Detached head mode:
-git -C <repo-dir> worktree add --detach <h2-dir>/worktrees/<agent-name> <branch-from>
+git -C <project-dir> worktree add --detach <h2-dir>/worktrees/<name> <branch-from>
 ```
 
 ### Re-run behavior
@@ -642,10 +651,13 @@ This avoids requiring cleanup between agent restarts and lets agents pick up whe
 
 ### Error conditions
 
-- `working_dir` does not exist → error
-- `working_dir` is not a git repo → error (check for `.git`)
+- `project_dir` does not exist → error
+- `project_dir` is not a git repo → error (check for `.git`)
 - Worktree directory exists but is not a valid git worktree → error with cleanup instructions
 - `branch_from` ref doesn't exist → git error, surfaced to user
+- `project_dir` missing → validation error
+- `name` missing → validation error
+- Both `working_dir` and `worktree` set → validation error
 
 ---
 

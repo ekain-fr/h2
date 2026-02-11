@@ -14,14 +14,19 @@ import (
 // Returns the absolute path to the new worktree.
 //
 // If the worktree already exists with a valid .git file, it is reused.
-// repoDir must be a git repository (or worktree).
-func CreateWorktree(agentName, repoDir string, cfg *config.WorktreeConfig) (string, error) {
-	// Verify repoDir is a git repo.
-	if !isGitRepo(repoDir) {
-		return "", fmt.Errorf("working_dir %q is not a git repository", repoDir)
+// cfg.ProjectDir (resolved) must be a git repository (or worktree).
+func CreateWorktree(cfg *config.WorktreeConfig) (string, error) {
+	repoDir, err := cfg.ResolveProjectDir()
+	if err != nil {
+		return "", err
 	}
 
-	worktreePath := filepath.Join(config.WorktreesDir(), agentName)
+	// Verify repoDir is a git repo.
+	if !isGitRepo(repoDir) {
+		return "", fmt.Errorf("worktree.project_dir %q is not a git repository", repoDir)
+	}
+
+	worktreePath := filepath.Join(config.WorktreesDir(), cfg.Name)
 
 	// Check if worktree already exists.
 	gitFile := filepath.Join(worktreePath, ".git")
@@ -57,12 +62,13 @@ func CreateWorktree(agentName, repoDir string, cfg *config.WorktreeConfig) (stri
 	}
 
 	branchFrom := cfg.GetBranchFrom()
+	branchName := cfg.GetBranchName()
 
 	var args []string
 	if cfg.UseDetachedHead {
 		args = []string{"worktree", "add", "--detach", worktreePath, branchFrom}
 	} else {
-		args = []string{"worktree", "add", "-b", agentName, worktreePath, branchFrom}
+		args = []string{"worktree", "add", "-b", branchName, worktreePath, branchFrom}
 	}
 
 	cmd := exec.Command("git", args...)

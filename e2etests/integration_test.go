@@ -22,18 +22,18 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 name: builder
 agent_type: "true"
 instructions: Build features.
-working_dir: projects/webapp
 worktree:
-  enabled: true
+  project_dir: projects/webapp
+  name: builder
   branch_from: main
 `)
 	createRole(t, h2Dir, "reviewer", `
 name: reviewer
 agent_type: "true"
 instructions: Review code.
-working_dir: projects/webapp
 worktree:
-  enabled: true
+  project_dir: projects/webapp
+  name: reviewer
   branch_from: main
   use_detached_head: true
 `)

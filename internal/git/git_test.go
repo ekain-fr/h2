@@ -55,11 +55,12 @@ func TestCreateWorktree_NewBranch(t *testing.T) {
 	repoDir := setupWorktreeTest(t)
 
 	cfg := &config.WorktreeConfig{
-		Enabled:    true,
+		ProjectDir: repoDir,
+		Name:       "test-agent",
 		BranchFrom: "main",
 	}
 
-	path, err := CreateWorktree("test-agent", repoDir, cfg)
+	path, err := CreateWorktree(cfg)
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
@@ -86,12 +87,13 @@ func TestCreateWorktree_DetachedHead(t *testing.T) {
 	repoDir := setupWorktreeTest(t)
 
 	cfg := &config.WorktreeConfig{
-		Enabled:         true,
+		ProjectDir:      repoDir,
+		Name:            "detached-agent",
 		BranchFrom:      "main",
 		UseDetachedHead: true,
 	}
 
-	path, err := CreateWorktree("detached-agent", repoDir, cfg)
+	path, err := CreateWorktree(cfg)
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
@@ -118,12 +120,13 @@ func TestCreateWorktree_ReuseExisting(t *testing.T) {
 	repoDir := setupWorktreeTest(t)
 
 	cfg := &config.WorktreeConfig{
-		Enabled:    true,
+		ProjectDir: repoDir,
+		Name:       "reuse-agent",
 		BranchFrom: "main",
 	}
 
 	// Create the worktree first time.
-	path1, err := CreateWorktree("reuse-agent", repoDir, cfg)
+	path1, err := CreateWorktree(cfg)
 	if err != nil {
 		t.Fatalf("CreateWorktree (first): %v", err)
 	}
@@ -132,7 +135,7 @@ func TestCreateWorktree_ReuseExisting(t *testing.T) {
 	os.WriteFile(filepath.Join(path1, "marker.txt"), []byte("exists"), 0o644)
 
 	// Call again — should reuse.
-	path2, err := CreateWorktree("reuse-agent", repoDir, cfg)
+	path2, err := CreateWorktree(cfg)
 	if err != nil {
 		t.Fatalf("CreateWorktree (second): %v", err)
 	}
@@ -157,9 +160,9 @@ func TestCreateWorktree_NonGitDir(t *testing.T) {
 	t.Setenv("H2_DIR", h2Dir)
 
 	notGitDir := t.TempDir()
-	cfg := &config.WorktreeConfig{Enabled: true, BranchFrom: "main"}
+	cfg := &config.WorktreeConfig{ProjectDir: notGitDir, Name: "agent", BranchFrom: "main"}
 
-	_, err := CreateWorktree("agent", notGitDir, cfg)
+	_, err := CreateWorktree(cfg)
 	if err == nil {
 		t.Fatal("expected error for non-git directory")
 	}
@@ -171,14 +174,14 @@ func TestCreateWorktree_NonGitDir(t *testing.T) {
 func TestCreateWorktree_CorruptWorktreeDir(t *testing.T) {
 	repoDir := setupWorktreeTest(t)
 
-	cfg := &config.WorktreeConfig{Enabled: true, BranchFrom: "main"}
+	cfg := &config.WorktreeConfig{ProjectDir: repoDir, Name: "corrupt-agent", BranchFrom: "main"}
 
 	// Pre-create the worktree dir with a file but no .git.
 	worktreePath := filepath.Join(config.WorktreesDir(), "corrupt-agent")
 	os.MkdirAll(worktreePath, 0o755)
 	os.WriteFile(filepath.Join(worktreePath, "some-file.txt"), []byte("data"), 0o644)
 
-	_, err := CreateWorktree("corrupt-agent", repoDir, cfg)
+	_, err := CreateWorktree(cfg)
 	if err == nil {
 		t.Fatal("expected error for corrupt worktree dir")
 	}
@@ -191,15 +194,48 @@ func TestCreateWorktree_DefaultBranchFrom(t *testing.T) {
 	repoDir := setupWorktreeTest(t)
 
 	// Don't set BranchFrom — should default to "main".
-	cfg := &config.WorktreeConfig{Enabled: true}
+	cfg := &config.WorktreeConfig{ProjectDir: repoDir, Name: "default-branch-agent"}
 
-	path, err := CreateWorktree("default-branch-agent", repoDir, cfg)
+	path, err := CreateWorktree(cfg)
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
 		t.Errorf("expected .git file in worktree, got error: %v", err)
+	}
+}
+
+func TestCreateWorktree_CustomBranchName(t *testing.T) {
+	repoDir := setupWorktreeTest(t)
+
+	cfg := &config.WorktreeConfig{
+		ProjectDir: repoDir,
+		Name:       "my-worktree",
+		BranchFrom: "main",
+		BranchName: "feature/custom-branch",
+	}
+
+	path, err := CreateWorktree(cfg)
+	if err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+
+	// Verify worktree was created.
+	if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
+		t.Errorf("expected .git file in worktree, got error: %v", err)
+	}
+
+	// Verify we're on the custom branch name.
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = path
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git branch --show-current: %v", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch != "feature/custom-branch" {
+		t.Errorf("branch = %q, want %q", branch, "feature/custom-branch")
 	}
 }
 
@@ -216,6 +252,24 @@ func TestWorktreeConfig_GetBranchFrom(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.GetBranchFrom(); got != tt.want {
 				t.Errorf("GetBranchFrom() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorktreeConfig_GetBranchName(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.WorktreeConfig
+		want string
+	}{
+		{"defaults to Name", config.WorktreeConfig{Name: "my-agent"}, "my-agent"},
+		{"custom branch name", config.WorktreeConfig{Name: "my-agent", BranchName: "feature/xyz"}, "feature/xyz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.GetBranchName(); got != tt.want {
+				t.Errorf("GetBranchName() = %q, want %q", got, tt.want)
 			}
 		})
 	}

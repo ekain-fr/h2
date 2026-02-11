@@ -97,9 +97,9 @@ func TestWorktree_NewBranch(t *testing.T) {
 name: wt-agent
 agent_type: "true"
 instructions: test worktree agent
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-test
   branch_from: main
 `)
 
@@ -156,9 +156,9 @@ func TestWorktree_DetachedHead(t *testing.T) {
 name: wt-detached
 agent_type: "true"
 instructions: test detached worktree
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-detach
   branch_from: main
   use_detached_head: true
 `)
@@ -189,11 +189,11 @@ worktree:
 	}
 }
 
-// §5.4 Worktree error: non-git working_dir
-func TestWorktree_NonGitWorkingDir(t *testing.T) {
+// §5.4 Worktree error: non-git project_dir
+func TestWorktree_NonGitProjectDir(t *testing.T) {
 	h2Dir := createTestH2Dir(t)
 
-	// Create a non-git directory for working_dir.
+	// Create a non-git directory for project_dir.
 	notGitDir := filepath.Join(h2Dir, "projects", "not-a-repo")
 	os.MkdirAll(notGitDir, 0o755)
 
@@ -201,9 +201,9 @@ func TestWorktree_NonGitWorkingDir(t *testing.T) {
 name: wt-nogit
 agent_type: "true"
 instructions: test
-working_dir: projects/not-a-repo
 worktree:
-  enabled: true
+  project_dir: projects/not-a-repo
+  name: wt-fail
 `)
 
 	result := runH2(t, h2Dir, "run", "--role", "wt-nogit", "--name", "wt-fail", "--detach")
@@ -227,9 +227,9 @@ func TestWorktree_CorruptWorktreeDir(t *testing.T) {
 name: wt-corrupt
 agent_type: "true"
 instructions: test
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-corrupt-test
   branch_from: main
 `)
 
@@ -259,9 +259,9 @@ func TestWorktree_ReuseExisting(t *testing.T) {
 name: wt-reuse
 agent_type: "true"
 instructions: test worktree reuse
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-reuse-test
   branch_from: main
 `)
 

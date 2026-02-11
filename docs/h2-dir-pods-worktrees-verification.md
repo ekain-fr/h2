@@ -235,9 +235,9 @@ git init && git commit --allow-empty -m "init" && git checkout -b main 2>/dev/nu
 cat > /tmp/test-h2-wt/roles/wt-agent.yaml <<'EOF'
 name: wt-agent
 instructions: test worktree agent
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-test
   branch_from: main
 EOF
 ```
@@ -260,9 +260,9 @@ H2_DIR=/tmp/test-h2-wt h2 run --role wt-agent --name wt-test --detach
 cat > /tmp/test-h2-wt/roles/wt-detached.yaml <<'EOF'
 name: wt-detached
 instructions: test detached worktree
-working_dir: projects/myrepo
 worktree:
-  enabled: true
+  project_dir: projects/myrepo
+  name: wt-detach
   branch_from: main
   use_detached_head: true
 EOF
@@ -275,21 +275,21 @@ H2_DIR=/tmp/test-h2-wt h2 run --role wt-detached --name wt-detach --detach
 - `git -C /tmp/test-h2-wt/worktrees/wt-detach rev-parse --abbrev-ref HEAD` → `HEAD` (detached)
 - No branch named `wt-detach` created
 
-### 5.4 Worktree error: non-git working_dir
+### 5.4 Worktree error: non-git project_dir
 
 ```bash
 cat > /tmp/test-h2-wt/roles/wt-nogit.yaml <<'EOF'
 name: wt-nogit
 instructions: test
-working_dir: projects
 worktree:
-  enabled: true
+  project_dir: projects
+  name: wt-fail
 EOF
 
 H2_DIR=/tmp/test-h2-wt h2 run --role wt-nogit --name wt-fail --detach
 ```
 
-**Expected**: Error indicating `working_dir` is not a git repository.
+**Expected**: Error indicating `project_dir` is not a git repository.
 
 ### 5.5 Worktree error: name collision (agent stopped)
 
@@ -337,24 +337,27 @@ h2 run --role default --override working_dir=/tmp --name test-override --detach
 
 **Cleanup**: `h2 stop test-override`
 
-### 6.2 Override a nested bool field
+### 6.2 Override a nested field (worktree.use_detached_head)
 
 ```bash
 h2 init /tmp/test-h2-override
 mkdir -p /tmp/test-h2-override/projects/repo
 cd /tmp/test-h2-override/projects/repo && git init && git commit --allow-empty -m "init"
 
-cat > /tmp/test-h2-override/roles/no-wt.yaml <<'EOF'
-name: no-wt
+cat > /tmp/test-h2-override/roles/wt-role.yaml <<'EOF'
+name: wt-role
 instructions: test
-working_dir: projects/repo
+worktree:
+  project_dir: projects/repo
+  name: test-wt-override
+  branch_from: main
 EOF
 
-# Override worktree.enabled at launch time
-H2_DIR=/tmp/test-h2-override h2 run --role no-wt --override worktree.enabled=true --name test-wt-override --detach
+# Override use_detached_head at launch time
+H2_DIR=/tmp/test-h2-override h2 run --role wt-role --override worktree.use_detached_head=true --name test-wt-override --detach
 ```
 
-**Expected**: Worktree is created at `/tmp/test-h2-override/worktrees/test-wt-override/` even though the role YAML doesn't have worktree enabled.
+**Expected**: Worktree is created at `/tmp/test-h2-override/worktrees/test-wt-override/` with detached HEAD.
 
 ### 6.3 Override with invalid key
 
@@ -367,7 +370,7 @@ h2 run --role default --override nonexistent.field=true --name test-bad-override
 ### 6.4 Override with type mismatch
 
 ```bash
-h2 run --role default --override worktree.enabled=notabool --name test-type-err --detach
+h2 run --role default --override worktree.use_detached_head=notabool --name test-type-err --detach
 ```
 
 **Expected**: Error about type mismatch (expected bool). Agent does not start.
@@ -589,18 +592,18 @@ git init && echo "hello" > README.md && git add . && git commit -m "init"
 cat > /tmp/test-h2-full/roles/builder.yaml <<'EOF'
 name: builder
 instructions: Build features.
-working_dir: projects/webapp
 worktree:
-  enabled: true
+  project_dir: projects/webapp
+  name: builder
   branch_from: main
 EOF
 
 cat > /tmp/test-h2-full/roles/reviewer.yaml <<'EOF'
 name: reviewer
 instructions: Review code.
-working_dir: projects/webapp
 worktree:
-  enabled: true
+  project_dir: projects/webapp
+  name: reviewer
   branch_from: main
   use_detached_head: true
 EOF

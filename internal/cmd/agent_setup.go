@@ -46,22 +46,24 @@ func setupAndForkAgent(name string, role *config.Role, detach bool, pod string, 
 	}
 
 	// Resolve the working directory for the agent.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get working directory: %w", err)
-	}
-	agentCWD, err := role.ResolveWorkingDir(cwd)
-	if err != nil {
-		return fmt.Errorf("resolve working_dir: %w", err)
-	}
-
-	// Create git worktree if enabled.
-	if role.Worktree != nil && role.Worktree.Enabled {
-		worktreePath, err := git.CreateWorktree(name, agentCWD, role.Worktree)
+	var agentCWD string
+	if role.Worktree != nil {
+		// Worktree mode: create/reuse worktree, CWD = worktree path.
+		worktreePath, err := git.CreateWorktree(role.Worktree)
 		if err != nil {
 			return fmt.Errorf("create worktree: %w", err)
 		}
 		agentCWD = worktreePath
+	} else {
+		// Normal mode: resolve working_dir.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get working directory: %w", err)
+		}
+		agentCWD, err = role.ResolveWorkingDir(cwd)
+		if err != nil {
+			return fmt.Errorf("resolve working_dir: %w", err)
+		}
 	}
 
 	sessionID := uuid.New().String()

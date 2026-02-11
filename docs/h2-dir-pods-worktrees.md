@@ -122,7 +122,7 @@ instructions: |
 - **Default `"."`**: interpreted as the CWD of the `h2 run` invocation. This preserves current behavior -- agents start wherever you run the command. Note: `"."` is special -- it's the only value resolved against invocation CWD rather than the h2 dir.
 - Any other relative path (e.g. `projects/my-app`) is resolved against the h2 dir. This makes role configs portable -- they reference stable project paths within the h2 directory structure.
 - Absolute paths are used as-is.
-- This is also the git repo that worktrees are created from (see section 5).
+- **Mutually exclusive with `worktree`**: if a `worktree` block is present, the source git repo is specified via `worktree.project_dir` instead (see section 5).
 
 ---
 
@@ -130,46 +130,52 @@ instructions: |
 
 Agents can run in their own git worktree so they don't conflict with each other or with the user's working directory.
 
-### Role config additions:
+### Role config:
 
 ```yaml
 name: feature-builder
 agent_type: claude
-working_dir: projects/my-app
 instructions: |
   You build features.
 
 worktree:
-  enabled: true
-  branch_from: main          # base branch (default: main)
-  use_detached_head: false   # if true, start on detached HEAD of branch_from
-                             # and let the agent create its own branch
+  project_dir: projects/my-app       # required: source git repo
+  name: feature-builder               # required: worktree dir name under <h2-dir>/worktrees/
+  branch_from: main                   # optional, default "main"
+  branch_name: feature/my-feature     # optional, default = name
+  use_detached_head: false            # optional, default false
 ```
+
+The `worktree` block is **mutually exclusive** with `working_dir`. Presence of the `worktree` block implies worktree mode is enabled (no separate `enabled` flag).
+
+- **`project_dir`** (required): the source git repo. Relative paths are resolved against the h2 dir. Absolute paths are used as-is.
+- **`name`** (required): determines the worktree directory name (`<h2-dir>/worktrees/<name>/`) and the default branch name.
+- **`branch_name`** (optional): allows decoupling the git branch name from the worktree directory name. Defaults to `name`.
+- **`branch_from`** (default `"main"`): the branch to base the worktree on.
+- **`use_detached_head`** (default `false`):
+  - `false`: creates a new branch named `branch_name` (or `name`) from `branch_from` and checks it out in the worktree.
+  - `true`: creates the worktree with `--detach` on `branch_from`, letting the agent decide what branch to create.
 
 ### Directory layout:
 
 ```
 <h2-dir>/worktrees/
-  <agent-name>/              # one worktree per agent instance
+  <name>/              # one worktree per agent, named by worktree.name
 ```
 
 ### Behavior:
 
-- When `setupAndForkAgent` sees `worktree.enabled: true`, it creates a new git worktree before forking the daemon.
-- The source repo is determined by the role's `working_dir`. The worktree is created under `<h2-dir>/worktrees/<agent-name>/`.
-- The agent's working directory is set to the worktree path (overriding `working_dir`).
-- Errors if `working_dir` does not point to a git repository.
-- **`branch_from`** (default `"main"`): the branch to base the worktree on.
-- **`use_detached_head`** (default `false`):
-  - `false`: creates a new branch named `<agent-name>` from `branch_from` and checks it out in the worktree.
-  - `true`: creates the worktree with `--detach` on `branch_from`, letting the agent decide what branch to create.
+- When `setupAndForkAgent` sees a `worktree` block, it creates a new git worktree before forking the daemon.
+- The source repo is determined by `worktree.project_dir`. The worktree is created under `<h2-dir>/worktrees/<name>/`.
+- The agent's working directory is set to the worktree path.
+- Errors if `project_dir` does not point to a git repository.
 - On agent stop/cleanup: the worktree is left in place (not auto-removed). Could add a `h2 worktree prune` command later.
 
 ### Worktree re-run behavior:
 
-If an agent with the same name is launched again after being stopped:
-- If the worktree directory already exists, reuse it (don't create a new one). The agent picks up where the previous instance left off.
-- If the worktree exists but the branch was deleted, error with a message suggesting cleanup.
+If a worktree with the same `name` already exists:
+- If the worktree directory already exists with a valid `.git` file, reuse it (don't create a new one). The agent picks up where the previous instance left off.
+- If the worktree exists but is corrupt (no `.git` file), error with a message suggesting cleanup.
 - This avoids the need for manual cleanup between runs and makes agent restarts natural.
 
 ---
@@ -179,9 +185,9 @@ If an agent with the same name is launched again after being stopped:
 Override individual role fields from the command line without editing the role file.
 
 ```
-h2 run --role feature-builder --override worktree.enabled=true
 h2 run --role default --override working_dir=/path/to/project
-h2 run --role default --override worktree.branch_from=develop --override worktree.use_detached_head=true
+h2 run --role feature-builder --override worktree.branch_from=develop --override worktree.use_detached_head=true
+h2 run --role feature-builder --override worktree.project_dir=/other/repo
 ```
 
 ### Syntax:
@@ -189,8 +195,11 @@ h2 run --role default --override worktree.branch_from=develop --override worktre
 `--override <key>=<value>` where `<key>` uses dot notation to address nested fields.
 
 - `working_dir=./my-project` -- sets the top-level `working_dir`
-- `worktree.enabled=true` -- sets `worktree.enabled`
+- `worktree.project_dir=/path/to/repo` -- sets `worktree.project_dir`
+- `worktree.name=my-wt` -- sets `worktree.name`
 - `worktree.branch_from=develop` -- sets `worktree.branch_from`
+- `worktree.branch_name=feature/xyz` -- sets `worktree.branch_name`
+- `worktree.use_detached_head=true` -- sets `worktree.use_detached_head`
 - `heartbeat.idle_timeout=10m` -- sets `heartbeat.idle_timeout`
 
 ### Behavior:

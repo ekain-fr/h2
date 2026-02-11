@@ -41,14 +41,14 @@ func TestApplyOverrides_NestedBool(t *testing.T) {
 	role := &Role{
 		Name:         "test",
 		Instructions: "test",
-		Worktree:     &WorktreeConfig{},
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
 	}
-	err := ApplyOverrides(role, []string{"worktree.enabled=true"})
+	err := ApplyOverrides(role, []string{"worktree.use_detached_head=true"})
 	if err != nil {
 		t.Fatalf("ApplyOverrides: %v", err)
 	}
-	if !role.Worktree.Enabled {
-		t.Error("Worktree.Enabled should be true")
+	if !role.Worktree.UseDetachedHead {
+		t.Error("Worktree.UseDetachedHead should be true")
 	}
 }
 
@@ -56,14 +56,14 @@ func TestApplyOverrides_NestedBoolFalse(t *testing.T) {
 	role := &Role{
 		Name:         "test",
 		Instructions: "test",
-		Worktree:     &WorktreeConfig{Enabled: true},
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt", UseDetachedHead: true},
 	}
-	err := ApplyOverrides(role, []string{"worktree.enabled=false"})
+	err := ApplyOverrides(role, []string{"worktree.use_detached_head=false"})
 	if err != nil {
 		t.Fatalf("ApplyOverrides: %v", err)
 	}
-	if role.Worktree.Enabled {
-		t.Error("Worktree.Enabled should be false")
+	if role.Worktree.UseDetachedHead {
+		t.Error("Worktree.UseDetachedHead should be false")
 	}
 }
 
@@ -72,15 +72,15 @@ func TestApplyOverrides_AutoInitNilWorktree(t *testing.T) {
 	if role.Worktree != nil {
 		t.Fatal("precondition: Worktree should be nil")
 	}
-	err := ApplyOverrides(role, []string{"worktree.enabled=true"})
+	err := ApplyOverrides(role, []string{"worktree.project_dir=/tmp/repo"})
 	if err != nil {
 		t.Fatalf("ApplyOverrides: %v", err)
 	}
 	if role.Worktree == nil {
 		t.Fatal("Worktree should have been auto-initialized")
 	}
-	if !role.Worktree.Enabled {
-		t.Error("Worktree.Enabled should be true")
+	if role.Worktree.ProjectDir != "/tmp/repo" {
+		t.Errorf("Worktree.ProjectDir = %q, want %q", role.Worktree.ProjectDir, "/tmp/repo")
 	}
 }
 
@@ -124,9 +124,9 @@ func TestApplyOverrides_TypeMismatch_BoolField(t *testing.T) {
 	role := &Role{
 		Name:         "test",
 		Instructions: "test",
-		Worktree:     &WorktreeConfig{},
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
 	}
-	err := ApplyOverrides(role, []string{"worktree.enabled=notabool"})
+	err := ApplyOverrides(role, []string{"worktree.use_detached_head=notabool"})
 	if err == nil {
 		t.Fatal("expected error for bool type mismatch")
 	}
@@ -244,8 +244,8 @@ func TestOverridesRecordedInMetadata(t *testing.T) {
 	dir := t.TempDir()
 
 	overrides := map[string]string{
-		"working_dir":         "/workspace",
-		"worktree.enabled": "true",
+		"working_dir":              "/workspace",
+		"worktree.project_dir": "/tmp/repo",
 	}
 	meta := SessionMetadata{
 		AgentName: "test-agent",
@@ -270,8 +270,8 @@ func TestOverridesRecordedInMetadata(t *testing.T) {
 	if got.Overrides["working_dir"] != "/workspace" {
 		t.Errorf("Overrides[working_dir] = %q, want %q", got.Overrides["working_dir"], "/workspace")
 	}
-	if got.Overrides["worktree.enabled"] != "true" {
-		t.Errorf("Overrides[worktree.enabled] = %q, want %q", got.Overrides["worktree.enabled"], "true")
+	if got.Overrides["worktree.project_dir"] != "/tmp/repo" {
+		t.Errorf("Overrides[worktree.project_dir] = %q, want %q", got.Overrides["worktree.project_dir"], "/tmp/repo")
 	}
 }
 

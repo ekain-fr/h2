@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -576,6 +577,74 @@ working_dir: /workspace/project
 	}
 	if role.WorkingDir != "/workspace/project" {
 		t.Errorf("WorkingDir = %q, want %q", role.WorkingDir, "/workspace/project")
+	}
+}
+
+func TestValidate_WorktreeAndWorkingDirMutualExclusivity(t *testing.T) {
+	// worktree + non-trivial working_dir should fail.
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		WorkingDir:   "projects/myapp",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for worktree + working_dir")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error = %q, want it to contain 'mutually exclusive'", err.Error())
+	}
+
+	// worktree + working_dir="." should be OK.
+	role2 := &Role{
+		Name:         "test",
+		Instructions: "test",
+		WorkingDir:   ".",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	if err := role2.Validate(); err != nil {
+		t.Errorf("worktree + working_dir='.' should be allowed: %v", err)
+	}
+
+	// worktree + empty working_dir should be OK.
+	role3 := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	if err := role3.Validate(); err != nil {
+		t.Errorf("worktree + empty working_dir should be allowed: %v", err)
+	}
+}
+
+func TestValidate_WorktreeMissingProjectDir(t *testing.T) {
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{Name: "test-wt"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing project_dir")
+	}
+	if !strings.Contains(err.Error(), "project_dir") {
+		t.Errorf("error = %q, want it to contain 'project_dir'", err.Error())
+	}
+}
+
+func TestValidate_WorktreeMissingName(t *testing.T) {
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing worktree name")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("error = %q, want it to contain 'name'", err.Error())
 	}
 }
 
