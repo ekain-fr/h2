@@ -30,7 +30,7 @@ Bot replies:                 (routed to agent as normal — not a command)
 
 ### 1. Config: Whitelisted Commands
 
-Add an `allowed_commands` field to the bridge config at the user level:
+Add an `allowed_commands` field at the **bridge level**, not the user level. Different channels may or may not make sense for command execution (e.g., Telegram yes, macOS notifications no):
 
 ```yaml
 # ~/.h2/config.yaml
@@ -40,22 +40,30 @@ users:
       telegram:
         bot_token: "..."
         chat_id: 12345
-    allowed_commands:
-      - h2
-      - bd
+        allowed_commands:
+          - h2
+          - bd
+      macos_notify:
+        enabled: true
+        # no allowed_commands — notifications are output-only
 ```
 
 **Config changes:**
 
 ```go
 // internal/config/config.go
-type UserConfig struct {
-    Bridges         BridgesConfig `yaml:"bridges"`
-    AllowedCommands []string      `yaml:"allowed_commands,omitempty"`
+type TelegramConfig struct {
+    BotToken        string   `yaml:"bot_token"`
+    ChatID          int64    `yaml:"chat_id"`
+    AllowedCommands []string `yaml:"allowed_commands,omitempty"`
 }
+
+// MacOSNotifyConfig stays unchanged — it's send-only, no inbound.
 ```
 
 The whitelist contains bare command names (not paths). Each entry must match `^[a-zA-Z0-9_-]+$` (same character class as agent names). Empty strings are rejected. The command is resolved via `exec.LookPath` at execution time.
+
+Since `allowed_commands` is per-bridge, each bridge type that supports inbound messages can independently define its whitelist. Bridges that are output-only (like macOS notifications) don't have the field at all.
 
 ### 2. Telegram Message Parsing
 
@@ -94,7 +102,7 @@ func ParseSlashCommand(text string, allowed []string) (command, args string) {
 
 ### 3. Command Execution
 
-New file `internal/bridgeservice/exec.go`:
+New file `internal/bridge/exec.go` (in the `bridge` package, not `bridgeservice`, to avoid circular imports — `bridgeservice` imports `bridge/telegram` which imports `bridge`):
 
 ```go
 // ExecCommand runs a whitelisted command and returns the formatted output.
@@ -142,84 +150,89 @@ Key decisions:
 - **CombinedOutput**: Interleaved stdout+stderr matches what a user expects.
 - **Output truncation**: Telegram has a 4096-char message limit. Truncate output with a `... (truncated)` suffix if it exceeds ~4000 chars.
 
-### 4. Integration Point: Bridge Service
+### 4. Integration Point: Bridge-Level Interception
 
-The bridge service's `handleInbound` method is the natural integration point. It already receives parsed messages before routing to agents.
+Since `allowed_commands` is per-bridge, each bridge that supports inbound messages handles command interception itself before calling the `InboundHandler`. This keeps the bridge service (`handleInbound`) unchanged and avoids needing to thread bridge identity through the handler callback.
 
-**Option A (chosen): Intercept in `handleInbound`**
+**Approach: Wrap handler in bridge's `Start()`**
 
-The `Service` struct gains an `allowedCommands []string` field set at construction time:
+The `InboundHandler` signature and bridge service are unchanged. Each Receiver bridge intercepts slash commands in its polling loop:
 
 ```go
-// internal/bridgeservice/service.go
+// internal/bridge/telegram/telegram.go
 
-func New(bridges []bridge.Bridge, concierge, socketDir, user string, allowedCommands []string) *Service {
-    return &Service{
-        bridges:         bridges,
-        concierge:       concierge,
-        socketDir:       socketDir,
-        user:            user,
-        allowedCommands: allowedCommands,
-    }
-}
-
-func (s *Service) handleInbound(targetAgent, body string) {
-    // If an explicit agent prefix was parsed, route to that agent.
-    // This ensures "concierge: /h2 list" sends the text "/h2 list" to
-    // the concierge rather than executing it as a command.
-    if targetAgent != "" {
-        // ... existing agent routing logic ...
-        return
-    }
-
-    // Check for slash commands before default-target agent routing.
-    cmd, args := bridge.ParseSlashCommand(body, s.allowedCommands)
-    if cmd != "" {
-        log.Printf("bridge: executing command /%s %s", cmd, args)
-        result := ExecCommand(cmd, args)
-        s.reply(result)
-        return
-    }
-
-    // ... existing default-target agent routing logic unchanged ...
+type Telegram struct {
+    Token           string
+    ChatID          int64
+    AllowedCommands []string  // from config
+    // ... existing fields ...
 }
 ```
 
-Note: the slash command check uses the **original message text** (the `body` after agent-prefix parsing). Since `/h2 list` doesn't match the agent prefix pattern (`name: body`), it arrives in `body` with `targetAgent=""`. The slash command check happens before `resolveDefaultTarget()`.
+In `poll()`, before calling `handler()`:
 
-Actually — looking more carefully at the flow: `ParseAgentPrefix("/h2 list")` would try to match `^([a-zA-Z0-9_-]+):\s*(.*)$` — the `/` prevents a match since `/h2` doesn't match `[a-zA-Z0-9_-]+`. So `body` = `/h2 list` and `targetAgent` = `""`. This is correct — the full original text reaches `handleInbound`.
+```go
+func (t *Telegram) poll(ctx context.Context, handler bridge.InboundHandler) {
+    // ... existing polling loop ...
+    for _, u := range updates {
+        // ... existing update filtering ...
+
+        // Check for slash commands before agent routing.
+        cmd, args := bridge.ParseSlashCommand(u.Message.Text, t.AllowedCommands)
+        if cmd != "" {
+            log.Printf("bridge: telegram: executing command /%s %s", cmd, args)
+            result := bridge.ExecCommand(cmd, args)
+            t.Send(ctx, result)
+            continue
+        }
+
+        agent, body := bridge.ParseAgentPrefix(u.Message.Text)
+        if agent == "" && u.Message.ReplyToMessage != nil {
+            agent = bridge.ParseAgentTag(u.Message.ReplyToMessage.Text)
+        }
+        handler(agent, body)
+    }
+}
+```
+
+This means:
+- Slash commands are checked on the **raw message text** before `ParseAgentPrefix` runs
+- The reply goes back to the originating bridge only (Telegram sends to Telegram) — this naturally solves the reply-broadcast issue from the reviewer feedback
+- The bridge service's `handleInbound` is untouched
+- Future bridges (Slack, Discord) can independently decide whether to support commands
+
+**Edge case: `concierge: /h2 list`**
+
+With bridge-level interception, `ParseSlashCommand("concierge: /h2 list", ...)` checks the raw text. Since it doesn't start with `/`, it returns empty — the message flows through to `ParseAgentPrefix` and routes to the concierge agent as intended. The agent-prefix naturally takes priority because of the `/` prefix requirement.
+
+Note: `ParseAgentPrefix("/h2 list")` would try to match `^([a-zA-Z0-9_-]+):\s*(.*)$` — the `/` prevents a match since `/h2` doesn't match `[a-zA-Z0-9_-]+`. So slash commands and agent prefixes are naturally disjoint.
 
 ### 5. Reply Path
 
-Add a `reply` helper that sends to all Sender bridges (reuses the same pattern as `replyError`):
-
-```go
-func (s *Service) reply(msg string) {
-    ctx := context.Background()
-    for _, b := range s.bridges {
-        if sender, ok := b.(bridge.Sender); ok {
-            if err := sender.Send(ctx, msg); err != nil {
-                log.Printf("bridge: reply via %s: %v", b.Name(), err)
-            }
-        }
-    }
-}
-```
-
-The existing `replyError` can be refactored to use `reply` internally.
+Since command interception happens at the bridge level, the bridge replies directly via its own `Send()` method. No changes to the bridge service's reply infrastructure are needed. This naturally solves the reply-broadcast concern — command output only goes to the bridge that received the command.
 
 ### 6. Wiring Through the Call Chain
 
-The allowed commands list needs to flow from config to the bridge daemon:
+The allowed commands list flows naturally through the existing config → bridge factory path:
 
-1. `bridge.go` CLI reads `userCfg.AllowedCommands`
-2. Passes to `ForkBridge(user, concierge, allowedCommands)`
-3. `ForkBridge` passes as CLI args to `_bridge-service` (e.g. `--allowed-cmd h2 --allowed-cmd bd`)
-4. `_bridge-service` hidden command reconstructs the list and passes to `New()`
+1. `_bridge-service` daemon loads config (already does this)
+2. `bridgeservice.FromConfig()` reads `cfg.Telegram.AllowedCommands` and sets it on the `Telegram` struct
+3. No additional CLI args or config plumbing needed
 
-Alternatively, since the bridge daemon already loads config, it can read `allowedCommands` directly from config in the `_bridge-service` command rather than passing through CLI args. This is simpler and means config changes take effect on bridge restart.
-
-**Chosen approach**: Read from config in `_bridge-service`. The daemon already loads config for bridge setup; adding `AllowedCommands` is trivial.
+```go
+// internal/bridgeservice/factory.go
+func FromConfig(cfg *config.BridgesConfig) []bridge.Bridge {
+    var bridges []bridge.Bridge
+    if cfg.Telegram != nil {
+        bridges = append(bridges, &telegram.Telegram{
+            Token:           cfg.Telegram.BotToken,
+            ChatID:          cfg.Telegram.ChatID,
+            AllowedCommands: cfg.Telegram.AllowedCommands,
+        })
+    }
+    // ...
+}
+```
 
 ### 7. Security Considerations
 
@@ -232,10 +245,6 @@ Alternatively, since the bridge daemon already loads config, it can read `allowe
 - **Output size**: Truncated to fit Telegram's message limit.
 - **No stdin**: Commands get no stdin (nil).
 - **Working directory**: Commands run in the h2 dir (from `ConfigDir()`), same environment as the bridge daemon. This means `h2` subcommands will resolve the h2 dir correctly. Commands that are project-dir-sensitive (e.g. git) would operate in the h2 dir, not a project root — acceptable for the intended `h2`/`bd` use case.
-
-### Known Limitations (v1)
-
-- **Reply broadcast**: Command output is sent to all configured Sender bridges, not just the one that originated the message. This matches existing `replyError` behavior. In practice most setups have a single platform bridge (Telegram). Supporting per-bridge reply routing would require threading bridge identity through `InboundHandler`, which is a larger refactor deferred to v2.
 
 ### 8. Output Truncation
 
@@ -256,14 +265,14 @@ func truncateOutput(s string) string {
 
 | File | Change |
 |------|--------|
-| `internal/config/config.go` | Add `AllowedCommands` to `UserConfig` |
+| `internal/config/config.go` | Add `AllowedCommands` to `TelegramConfig` |
 | `internal/bridge/bridge.go` | Add `ParseSlashCommand()` |
 | `internal/bridge/bridge_test.go` | Tests for `ParseSlashCommand` |
-| `internal/bridgeservice/exec.go` | New: `ExecCommand()`, `truncateOutput()` |
-| `internal/bridgeservice/exec_test.go` | New: tests for command execution |
-| `internal/bridgeservice/service.go` | Add `allowedCommands` field, intercept in `handleInbound`, add `reply()` |
-| `internal/bridgeservice/service_test.go` | Update tests for new field + command interception |
-| `internal/cmd/bridge_service.go` | Pass `AllowedCommands` from config to `New()` |
+| `internal/bridge/telegram/telegram.go` | Add `AllowedCommands` field, intercept in `poll()`, reply via `Send()` |
+| `internal/bridge/telegram/telegram_test.go` | Tests for command interception in poll loop |
+| `internal/bridge/exec.go` | New: `ExecCommand()`, `truncateOutput()` |
+| `internal/bridge/exec_test.go` | New: tests for command execution |
+| `internal/bridgeservice/factory.go` | Pass `AllowedCommands` from config to `Telegram` struct |
 
 ## Dependency
 
@@ -293,11 +302,11 @@ func truncateOutput(s string) string {
 6. Empty output: `ExecCommand("true", "")` → `"(no output)"`
 7. Argument quoting: `ExecCommand("echo", "'hello world'")` → `"hello world"`
 
-**`service_test.go` — handleInbound with commands:**
-1. Message `/h2 list` with `allowedCommands=["h2"]` → command executed, reply sent to bridge, NOT routed to agent
-2. Message `hello` with `allowedCommands=["h2"]` → routed to agent as normal
-3. Message `/h2 list` with `allowedCommands=[]` → routed to agent (empty whitelist)
-4. Message `concierge: /h2 list` → arrives as targetAgent="concierge", body="/h2 list". Since targetAgent is set, it routes to concierge (agent-prefix takes priority over slash commands). This ensures explicit agent routing still works.
+**`telegram_test.go` — poll loop command interception:**
+1. Message `/h2 list` with `AllowedCommands=["h2"]` → command executed, reply sent via Telegram `Send()`, handler NOT called
+2. Message `hello` with `AllowedCommands=["h2"]` → handler called as normal
+3. Message `/h2 list` with `AllowedCommands=[]` → handler called (empty whitelist, no interception)
+4. Message `concierge: /h2 list` with `AllowedCommands=["h2"]` → `ParseSlashCommand` returns empty (no leading `/`), handler called with agent prefix routing. Agent-prefix naturally takes priority.
 
 **Config validation tests:**
 1. `allowed_commands: ["h2", "bd"]` → valid
@@ -315,7 +324,9 @@ func truncateOutput(s string) string {
 
 ## Alternatives Considered
 
-**Intercept in `telegram.go` poll()**: Rejected because it would couple Telegram-specific code with command execution and bypass the bridge service abstraction. Other future bridge types (Slack, Discord) should get the same command execution for free.
+**Intercept in bridge service `handleInbound()`**: Initially chosen, then rejected. With `allowed_commands` at the bridge level (not user level), the bridge service doesn't know which bridge sent the message. Intercepting at the bridge level is cleaner: each bridge handles its own commands and replies directly, avoiding the broadcast-reply problem and keeping the bridge service agnostic.
+
+**User-level `allowed_commands`**: Rejected. Different channels have different capabilities and trust levels. Telegram supports interactive commands; macOS notifications are output-only. Per-bridge config is more flexible.
 
 **Use a shell for argument parsing**: Rejected for security. `sh -c` would enable injection via backticks, `$()`, pipes, etc. Go's shlex is sufficient for the intended use cases.
 
