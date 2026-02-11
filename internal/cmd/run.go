@@ -70,7 +70,14 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 				if roleName == "" {
 					roleName = "default"
 				}
-				role, err := config.LoadRole(roleName)
+				// When --pod is specified, check pod roles first then global.
+				var role *config.Role
+				var err error
+				if pod != "" {
+					role, err = config.LoadPodRole(roleName)
+				} else {
+					role, err = config.LoadRole(roleName)
+				}
 				if err != nil {
 					if roleName == "concierge" {
 						return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")

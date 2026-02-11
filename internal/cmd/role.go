@@ -29,23 +29,44 @@ func newRoleListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List available roles",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			roles, err := config.ListRoles()
+			globalRoles, err := config.ListRoles()
 			if err != nil {
 				return err
 			}
-			if len(roles) == 0 {
+			podRoles, err := config.ListPodRoles()
+			if err != nil {
+				return err
+			}
+
+			if len(globalRoles) == 0 && len(podRoles) == 0 {
 				fmt.Printf("No roles found in %s\n", config.RolesDir())
 				return nil
 			}
-			for _, r := range roles {
-				desc := r.Description
-				if desc == "" {
-					desc = "(no description)"
+
+			// If pod roles exist, show grouped output.
+			if len(podRoles) > 0 {
+				if len(globalRoles) > 0 {
+					fmt.Printf("\033[1mGlobal roles\033[0m\n")
+					printRoleList(globalRoles)
 				}
-				fmt.Printf("%-16s %s\n", r.Name, desc)
+				fmt.Printf("\033[1mPod roles\033[0m\n")
+				printRoleList(podRoles)
+			} else {
+				// No pod roles — flat output (backward compatible).
+				printRoleList(globalRoles)
 			}
 			return nil
 		},
+	}
+}
+
+func printRoleList(roles []*config.Role) {
+	for _, r := range roles {
+		desc := r.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Printf("  %-16s %s\n", r.Name, desc)
 	}
 }
 
