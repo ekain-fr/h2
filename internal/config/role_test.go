@@ -509,6 +509,76 @@ func TestHeartbeatConfig_ParseIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestResolveRootDir_Default(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test"}
+	got, err := role.ResolveRootDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveRootDir: %v", err)
+	}
+	if got != "/my/cwd" {
+		t.Errorf("ResolveRootDir() = %q, want %q", got, "/my/cwd")
+	}
+}
+
+func TestResolveRootDir_Dot(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test", RootDir: "."}
+	got, err := role.ResolveRootDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveRootDir: %v", err)
+	}
+	if got != "/my/cwd" {
+		t.Errorf("ResolveRootDir(\".\") = %q, want %q", got, "/my/cwd")
+	}
+}
+
+func TestResolveRootDir_Absolute(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test", RootDir: "/some/absolute/path"}
+	got, err := role.ResolveRootDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveRootDir: %v", err)
+	}
+	if got != "/some/absolute/path" {
+		t.Errorf("ResolveRootDir(abs) = %q, want %q", got, "/some/absolute/path")
+	}
+}
+
+func TestResolveRootDir_Relative(t *testing.T) {
+	ResetResolveCache()
+	defer ResetResolveCache()
+
+	// Create a valid h2 dir so ResolveDir succeeds.
+	h2Dir := t.TempDir()
+	WriteMarker(h2Dir)
+	t.Setenv("H2_DIR", h2Dir)
+
+	role := &Role{Name: "test", Instructions: "test", RootDir: "projects/myapp"}
+	got, err := role.ResolveRootDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveRootDir: %v", err)
+	}
+	want := filepath.Join(h2Dir, "projects/myapp")
+	if got != want {
+		t.Errorf("ResolveRootDir(rel) = %q, want %q", got, want)
+	}
+}
+
+func TestResolveRootDir_FromYAML(t *testing.T) {
+	yaml := `
+name: worker
+instructions: |
+  A worker agent.
+root_dir: /workspace/project
+`
+	path := writeTempFile(t, "worker.yaml", yaml)
+	role, err := LoadRoleFrom(path)
+	if err != nil {
+		t.Fatalf("LoadRoleFrom: %v", err)
+	}
+	if role.RootDir != "/workspace/project" {
+		t.Errorf("RootDir = %q, want %q", role.RootDir, "/workspace/project")
+	}
+}
+
 func writeTempFile(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

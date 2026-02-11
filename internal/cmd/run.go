@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"h2/internal/config"
 	"h2/internal/session"
 )
 
@@ -31,8 +32,6 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var cmdCommand string
 			var cmdArgs []string
-			var sessionDir string
-			var claudeConfigDir string
 			var heartbeat session.DaemonHeartbeat
 
 			// Check mutual exclusivity of mode flags.
@@ -62,7 +61,17 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 				if roleName == "" {
 					roleName = "default"
 				}
-				return setupAndForkAgent(name, roleName, detach)
+				role, err := config.LoadRole(roleName)
+				if err != nil {
+					if roleName == "concierge" {
+						return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
+					}
+					if roleName == "default" {
+						return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
+					}
+					return fmt.Errorf("load role %q: %w", roleName, err)
+				}
+				return setupAndForkAgent(name, role, detach)
 			}
 
 			// Agent-type or command mode: fork without a role.
@@ -73,7 +82,13 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 			sessionID := uuid.New().String()
 
 			// Fork a daemon process.
-			if err := session.ForkDaemon(name, sessionID, cmdCommand, cmdArgs, "", sessionDir, claudeConfigDir, heartbeat); err != nil {
+			if err := session.ForkDaemon(session.ForkDaemonOpts{
+				Name:      name,
+				SessionID: sessionID,
+				Command:   cmdCommand,
+				Args:      cmdArgs,
+				Heartbeat: heartbeat,
+			}); err != nil {
 				return err
 			}
 

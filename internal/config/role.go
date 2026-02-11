@@ -30,11 +30,31 @@ type Role struct {
 	AgentType       string           `yaml:"agent_type,omitempty"` // "claude" (default), future: other agent types
 	Model           string           `yaml:"model,omitempty"`
 	ClaudeConfigDir string           `yaml:"claude_config_dir,omitempty"`
+	RootDir         string           `yaml:"root_dir,omitempty"` // agent CWD (default ".")
 	Instructions    string           `yaml:"instructions"`
 	Permissions     Permissions      `yaml:"permissions,omitempty"`
 	Heartbeat       *HeartbeatConfig `yaml:"heartbeat,omitempty"`
 	Hooks           yaml.Node        `yaml:"hooks,omitempty"`   // passed through as-is to settings.json
 	Settings        yaml.Node        `yaml:"settings,omitempty"` // extra settings.json keys
+}
+
+// ResolveRootDir returns the absolute path for the agent's working directory.
+// "." (or empty) is interpreted as invocationCWD. Relative paths are resolved
+// against the h2 dir. Absolute paths are used as-is.
+func (r *Role) ResolveRootDir(invocationCWD string) (string, error) {
+	dir := r.RootDir
+	if dir == "" || dir == "." {
+		return invocationCWD, nil
+	}
+	if filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	// Relative path: resolve against h2 dir.
+	h2Dir, err := ResolveDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve h2 dir for root_dir: %w", err)
+	}
+	return filepath.Join(h2Dir, dir), nil
 }
 
 // GetAgentType returns the agent type for this role, defaulting to "claude".

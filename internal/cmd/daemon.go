@@ -44,7 +44,16 @@ func newDaemonCmd() *cobra.Command {
 				}
 			}
 
-			err := session.RunDaemon(name, sessionID, args[0], args[1:], roleName, sessionDir, claudeConfigDir, heartbeat)
+			err := session.RunDaemon(session.RunDaemonOpts{
+				Name:            name,
+				SessionID:       sessionID,
+				Command:         args[0],
+				Args:            args[1:],
+				RoleName:        roleName,
+				SessionDir:      sessionDir,
+				ClaudeConfigDir: claudeConfigDir,
+				Heartbeat:       heartbeat,
+			})
 			if err != nil {
 				if _, ok := err.(*exec.ExitError); ok {
 					os.Exit(1)
