@@ -61,7 +61,7 @@ type TelegramConfig struct {
 // MacOSNotifyConfig stays unchanged — it's send-only, no inbound.
 ```
 
-The whitelist contains bare command names (not paths). Each entry must match `^[a-zA-Z0-9_-]+$` (same character class as agent names). Empty strings are rejected. The command is resolved via `exec.LookPath` at execution time.
+The whitelist contains bare command names (not paths). Each entry must match `^[a-zA-Z0-9_-]+$` (same character class as agent names). Empty strings are rejected. Validation happens in `config.Load()` — a new `validateAllowedCommands()` helper checks each entry against the regex and returns an error for invalid entries. The command is resolved via `exec.LookPath` at execution time.
 
 Since `allowed_commands` is per-bridge, each bridge type that supports inbound messages can independently define its whitelist. Bridges that are output-only (like macOS notifications) don't have the field at all.
 
@@ -246,6 +246,10 @@ func FromConfig(cfg *config.BridgesConfig) []bridge.Bridge {
 - **No stdin**: Commands get no stdin (nil).
 - **Working directory**: Commands run in the h2 dir (from `ConfigDir()`), same environment as the bridge daemon. This means `h2` subcommands will resolve the h2 dir correctly. Commands that are project-dir-sensitive (e.g. git) would operate in the h2 dir, not a project root — acceptable for the intended `h2`/`bd` use case.
 
+### Known Limitations (v1)
+
+- **Sequential command execution blocks polling**: `ExecCommand` runs synchronously in `poll()`. While a command executes (up to 30s timeout), no new messages are processed. Acceptable for v1 since `h2` and `bd` commands are fast (<1s). If long-running commands are added later, move execution to a goroutine.
+
 ### 8. Output Truncation
 
 Telegram messages max out at 4096 characters. The output formatter:
@@ -257,7 +261,9 @@ func truncateOutput(s string) string {
     if len(s) <= maxOutputLen {
         return s
     }
-    return s[:maxOutputLen] + "\n... (truncated)"
+    // Truncate at rune boundary to avoid slicing mid-UTF8 character.
+    truncated := string([]rune(s)[:maxOutputLen])
+    return truncated + "\n... (truncated)"
 }
 ```
 
@@ -265,7 +271,7 @@ func truncateOutput(s string) string {
 
 | File | Change |
 |------|--------|
-| `internal/config/config.go` | Add `AllowedCommands` to `TelegramConfig` |
+| `internal/config/config.go` | Add `AllowedCommands` to `TelegramConfig`, add `validateAllowedCommands()` called from `Load()` |
 | `internal/bridge/bridge.go` | Add `ParseSlashCommand()` |
 | `internal/bridge/bridge_test.go` | Tests for `ParseSlashCommand` |
 | `internal/bridge/telegram/telegram.go` | Add `AllowedCommands` field, intercept in `poll()`, reply via `Send()` |
@@ -288,7 +294,7 @@ func truncateOutput(s string) string {
 3. `/h2` alone (no args) with `["h2"]` → `("h2", "")`
 4. `/notallowed foo` with `["h2"]` → `("", "")`
 5. Plain text `hello` → `("", "")`
-6. Agent-prefixed `concierge: /h2 list` — will have been parsed by `ParseAgentPrefix` first, so body="/h2 list" would match. This is fine — `handleInbound` guards with `targetAgent != ""` check first.
+6. Agent-prefixed `concierge: /h2 list` → `("", "")` — doesn't start with `/`, so slash command parsing is bypassed entirely. The message flows through to `ParseAgentPrefix` which routes it to the concierge agent.
 7. Empty allowed list → always `("", "")`
 8. `/H2 list` (case sensitivity) → `("", "")` (case-sensitive match)
 9. `/h2   ` (trailing whitespace, no args) → `("h2", "")` (cmd trimmed)
