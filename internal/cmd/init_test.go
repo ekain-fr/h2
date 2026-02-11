@@ -117,27 +117,19 @@ func TestInitCmd_Global(t *testing.T) {
 	}
 }
 
-func TestInitCmd_DefaultCurrentDir(t *testing.T) {
-	dir := t.TempDir()
-
-	// Change to the temp dir so default "." resolves there.
-	origDir, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(origDir)
-
+func TestInitCmd_RequiresDirArg(t *testing.T) {
 	cmd := newInitCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{})
 
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("init (default dir) failed: %v", err)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when no dir argument provided")
 	}
-
-	// Resolve symlinks for macOS /var -> /private/var.
-	resolved, _ := filepath.EvalSymlinks(dir)
-	if !config.IsH2Dir(resolved) {
-		t.Error("expected current dir to be an h2 directory")
+	if !strings.Contains(err.Error(), "directory argument is required") {
+		t.Errorf("error = %q, want it to contain 'directory argument is required'", err.Error())
 	}
 }
 

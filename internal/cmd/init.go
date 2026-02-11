@@ -27,11 +27,15 @@ func newInitCmd() *cobra.Command {
 	var global bool
 
 	cmd := &cobra.Command{
-		Use:   "init [dir]",
+		Use:   "init <dir>",
 		Short: "Initialize an h2 directory",
 		Long:  "Create an h2 directory with the standard structure. Use --global to initialize ~/.h2/.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !global && len(args) == 0 {
+				return fmt.Errorf("directory argument is required (or use --global for ~/.h2/)")
+			}
+
 			var dir string
 			switch {
 			case global:
@@ -40,10 +44,8 @@ func newInitCmd() *cobra.Command {
 					return fmt.Errorf("cannot determine home directory: %w", err)
 				}
 				dir = filepath.Join(home, ".h2")
-			case len(args) == 1:
-				dir = args[0]
 			default:
-				dir = "."
+				dir = args[0]
 			}
 
 			abs, err := filepath.Abs(dir)
