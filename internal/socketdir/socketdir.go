@@ -60,7 +60,7 @@ var (
 // a symlink from /tmp/h2-<hash>/ is created and returned instead.
 func Dir() string {
 	socketDirOnce.Do(func() {
-		socketDir = resolveSocketDir()
+		socketDir = ResolveSocketDir(config.ConfigDir())
 	})
 	return socketDir
 }
@@ -71,8 +71,11 @@ func ResetDirCache() {
 	socketDir = ""
 }
 
-func resolveSocketDir() string {
-	realDir := filepath.Join(config.ConfigDir(), "sockets")
+// ResolveSocketDir returns the socket directory for a given h2 dir.
+// If the resulting path would be too long for Unix domain sockets,
+// a symlink from /tmp/h2-<hash>/ is created and returned instead.
+func ResolveSocketDir(h2Dir string) string {
+	realDir := filepath.Join(h2Dir, "sockets")
 
 	// Check if a typical socket path would exceed the limit.
 	// Use a representative long socket name to test.

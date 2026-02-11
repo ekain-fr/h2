@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"h2/internal/config"
 	"h2/internal/session/agent"
 	"h2/internal/session/message"
 	"h2/internal/socketdir"
@@ -17,11 +19,20 @@ import (
 
 func newLsCmd() *cobra.Command {
 	var podFlag string
+	var allFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List running agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if allFlag && cmd.Flags().Changed("pod") {
+				return fmt.Errorf("--all and --pod are mutually exclusive")
+			}
+
+			if allFlag {
+				return listAll()
+			}
+
 			entries, err := socketdir.List()
 			if err != nil {
 				return err
@@ -71,6 +82,7 @@ func newLsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&podFlag, "pod", "", "Filter by pod name, or '*' to show all grouped by pod")
+	cmd.Flags().BoolVar(&allFlag, "all", false, "List agents from all discovered h2 directories")
 
 	return cmd
 }
@@ -274,6 +286,121 @@ func newLsAlias(listCmd *cobra.Command) *cobra.Command {
 			return listCmd.RunE(listCmd, args)
 		},
 	}
+}
+
+// listAll discovers all h2 directories and lists agents from each.
+func listAll() error {
+	h2Dirs := config.ResolveDirAll()
+	if len(h2Dirs) == 0 {
+		fmt.Println("No h2 directories found.")
+		return nil
+	}
+
+	for i, h2Dir := range h2Dirs {
+		if i > 0 {
+			fmt.Println()
+		}
+
+		fmt.Printf("\033[1m%s\033[0m\n", shortenHome(h2Dir))
+
+		sockDir := socketdir.ResolveSocketDir(h2Dir)
+		entries, err := socketdir.ListIn(sockDir)
+		if err != nil {
+			fmt.Printf("  \033[2m(error reading sockets: %v)\033[0m\n", err)
+			continue
+		}
+
+		if len(entries) == 0 {
+			fmt.Println("  No running agents.")
+			continue
+		}
+
+		var bridges []socketdir.Entry
+		var agentInfos []*message.AgentInfo
+		var unresponsive []string
+		for _, e := range entries {
+			switch e.Type {
+			case socketdir.TypeBridge:
+				bridges = append(bridges, e)
+			case socketdir.TypeAgent:
+				info := queryAgent(e.Path)
+				if info != nil {
+					agentInfos = append(agentInfos, info)
+				} else {
+					unresponsive = append(unresponsive, e.Name)
+				}
+			}
+		}
+
+		groups := groupAgentsByPod(agentInfos, "*")
+		if len(groups) > 0 || len(unresponsive) > 0 {
+			printPodGroupsIndented(groups, unresponsive)
+		}
+
+		if len(bridges) > 0 {
+			fmt.Printf("  \033[1mBridges\033[0m\n")
+			for _, e := range bridges {
+				fmt.Printf("    \033[32m●\033[0m %s\n", e.Name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// printPodGroupsIndented renders grouped agent output with extra indent for --all mode.
+func printPodGroupsIndented(groups []podGroup, unresponsive []string) {
+	if len(groups) == 0 && len(unresponsive) == 0 {
+		return
+	}
+
+	hasPods := false
+	for _, g := range groups {
+		if g.Pod != "" {
+			hasPods = true
+			break
+		}
+	}
+
+	for i, g := range groups {
+		if i > 0 {
+			fmt.Println()
+		}
+
+		if hasPods || len(groups) > 1 {
+			if g.Pod != "" {
+				fmt.Printf("  \033[1mAgents (pod: %s)\033[0m\n", g.Pod)
+			} else {
+				fmt.Printf("  \033[1mAgents (no pod)\033[0m\n")
+			}
+		} else {
+			fmt.Printf("  \033[1mAgents\033[0m\n")
+		}
+
+		for _, info := range g.Agents {
+			fmt.Print("  ")
+			printAgentLine(info)
+		}
+	}
+
+	for _, name := range unresponsive {
+		fmt.Printf("    \033[31m✗\033[0m %s \033[2m(not responding)\033[0m\n", name)
+	}
+}
+
+// shortenHome replaces the home directory prefix with ~ in a path.
+func shortenHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(filepath.Separator)) {
+		return "~" + path[len(home):]
+	}
+	return path
 }
 
 // agentConnError returns an error for a failed agent connection that includes

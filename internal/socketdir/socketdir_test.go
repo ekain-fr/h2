@@ -182,15 +182,51 @@ func TestListIn_NonexistentDir(t *testing.T) {
 }
 
 func TestResolveSocketDir_ShortPath(t *testing.T) {
-	// For a normal-length path, resolveSocketDir should return the real path.
-	// We can't easily control config.ConfigDir() in tests, but we can verify
-	// that Dir() returns a path ending in "sockets".
-	ResetDirCache()
-	defer ResetDirCache()
+	// For a short h2 dir path, ResolveSocketDir returns <h2Dir>/sockets/.
+	// Use a short path to avoid the macOS long temp dir issue.
+	h2Dir := filepath.Join(os.TempDir(), "h2t")
+	os.MkdirAll(h2Dir, 0o755)
+	defer os.RemoveAll(h2Dir)
 
-	dir := Dir()
-	if !strings.HasSuffix(dir, "sockets") {
-		t.Errorf("Dir() = %q, expected to end with 'sockets'", dir)
+	got := ResolveSocketDir(h2Dir)
+	want := filepath.Join(h2Dir, "sockets")
+	if got != want {
+		t.Errorf("ResolveSocketDir(%q) = %q, want %q", h2Dir, got, want)
+	}
+}
+
+func TestResolveSocketDir_LongPath(t *testing.T) {
+	// For an extremely long path, ResolveSocketDir should return a short symlink path.
+	// Build a path long enough to exceed maxSocketPathLen (100).
+	base := t.TempDir()
+	longPart := strings.Repeat("a", 80)
+	longDir := filepath.Join(base, longPart)
+	os.MkdirAll(longDir, 0o755)
+
+	got := ResolveSocketDir(longDir)
+
+	// The result should be a symlink path under /tmp/ (or os.TempDir()),
+	// not the original long path.
+	if strings.HasPrefix(got, longDir) {
+		// If the path is still short enough (test path happens to be short on this system),
+		// that's fine — the logic only kicks in for truly long paths.
+		testPath := filepath.Join(longDir, "sockets", "agent.long-agent-name-example.sock")
+		if len(testPath) > 100 {
+			t.Errorf("ResolveSocketDir returned long path %q, expected symlink", got)
+		}
+	}
+
+	// The returned directory (or its symlink target) should point to <h2Dir>/sockets.
+	if strings.Contains(got, "h2-") {
+		// It's a symlink — verify it points to the right place.
+		target, err := os.Readlink(got)
+		if err != nil {
+			t.Fatalf("Readlink(%q): %v", got, err)
+		}
+		wantTarget := filepath.Join(longDir, "sockets")
+		if target != wantTarget {
+			t.Errorf("symlink target = %q, want %q", target, wantTarget)
+		}
 	}
 }
 
