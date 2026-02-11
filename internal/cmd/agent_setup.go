@@ -14,7 +14,7 @@ import (
 // setupAndForkAgent sets up the agent session, forks the daemon,
 // and optionally attaches to it. This is shared by both 'h2 run' and 'h2 bridge'.
 // The caller is responsible for loading the role and applying any overrides.
-func setupAndForkAgent(name string, role *config.Role, detach bool) error {
+func setupAndForkAgent(name string, role *config.Role, detach bool, pod string, overrides []string) error {
 	if name == "" {
 		name = session.GenerateName()
 	}
@@ -76,6 +76,8 @@ func setupAndForkAgent(name string, role *config.Role, detach bool) error {
 		ClaudeConfigDir: claudeConfigDir,
 		Heartbeat:       heartbeat,
 		CWD:             agentCWD,
+		Pod:             pod,
+		Overrides:       overrides,
 	}); err != nil {
 		return err
 	}

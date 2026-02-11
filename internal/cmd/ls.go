@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"net"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,7 +16,9 @@ import (
 )
 
 func newLsCmd() *cobra.Command {
-	return &cobra.Command{
+	var podFlag string
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List running agents",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -27,37 +31,154 @@ func newLsCmd() *cobra.Command {
 				return nil
 			}
 
-			// Group by type.
-			var agents, bridges []socketdir.Entry
+			// Collect bridge entries and query agent info.
+			var bridges []socketdir.Entry
+			var agentInfos []*message.AgentInfo
+			var unresponsive []string
 			for _, e := range entries {
 				switch e.Type {
-				case socketdir.TypeAgent:
-					agents = append(agents, e)
 				case socketdir.TypeBridge:
 					bridges = append(bridges, e)
+				case socketdir.TypeAgent:
+					info := queryAgent(e.Path)
+					if info != nil {
+						agentInfos = append(agentInfos, info)
+					} else {
+						unresponsive = append(unresponsive, e.Name)
+					}
 				}
 			}
 
+			// Determine effective pod filter.
+			podFilter := podFlag
+			if !cmd.Flags().Changed("pod") {
+				podFilter = os.Getenv("H2_POD")
+			}
+
+			groups := groupAgentsByPod(agentInfos, podFilter)
+			printPodGroups(groups, unresponsive)
+
+			// Bridges are always shown.
 			if len(bridges) > 0 {
-				fmt.Printf("\033[1mBridge Users:\033[0m\n")
+				fmt.Printf("\n\033[1mBridges\033[0m\n")
 				for _, e := range bridges {
 					fmt.Printf("  \033[32m●\033[0m %s\n", e.Name)
 				}
 			}
 
-			if len(agents) > 0 {
-				fmt.Printf("\033[1mAgents:\033[0m\n")
-				for _, e := range agents {
-					info := queryAgent(e.Path)
-					if info != nil {
-						printAgentLine(info)
-					} else {
-						fmt.Printf("  \033[31m✗\033[0m %s \033[2m(not responding)\033[0m\n", e.Name)
-					}
-				}
-			}
 			return nil
 		},
+	}
+
+	cmd.Flags().StringVar(&podFlag, "pod", "", "Filter by pod name, or '*' to show all grouped by pod")
+
+	return cmd
+}
+
+// podGroup represents a group of agents with the same pod name.
+type podGroup struct {
+	Pod    string // empty string means "no pod"
+	Agents []*message.AgentInfo
+}
+
+// groupAgentsByPod groups agents according to the pod filter logic.
+//
+// podFilter semantics:
+//   - "*": show all agents, grouped by pod
+//   - "<name>": show only agents in that pod
+//   - "": show all agents, grouped by pod if any pods exist
+func groupAgentsByPod(agents []*message.AgentInfo, podFilter string) []podGroup {
+	if len(agents) == 0 {
+		return nil
+	}
+
+	// Collect agents into pod buckets.
+	podMap := make(map[string][]*message.AgentInfo) // pod name -> agents ("" for no pod)
+	for _, a := range agents {
+		podMap[a.Pod] = append(podMap[a.Pod], a)
+	}
+
+	// Filter by specific pod name.
+	if podFilter != "" && podFilter != "*" {
+		filtered := podMap[podFilter]
+		if len(filtered) == 0 {
+			return nil
+		}
+		return []podGroup{{Pod: podFilter, Agents: filtered}}
+	}
+
+	// Check if any agents have pod membership.
+	hasPods := false
+	for pod := range podMap {
+		if pod != "" {
+			hasPods = true
+			break
+		}
+	}
+
+	// If showing all and no pods exist, return a single flat group.
+	if !hasPods && podFilter != "*" {
+		return []podGroup{{Pod: "", Agents: agents}}
+	}
+
+	// Build sorted groups: named pods first (alphabetical), then no-pod.
+	var podNames []string
+	for pod := range podMap {
+		if pod != "" {
+			podNames = append(podNames, pod)
+		}
+	}
+	sort.Strings(podNames)
+
+	var groups []podGroup
+	for _, pod := range podNames {
+		groups = append(groups, podGroup{Pod: pod, Agents: podMap[pod]})
+	}
+	if noPod := podMap[""]; len(noPod) > 0 {
+		groups = append(groups, podGroup{Pod: "", Agents: noPod})
+	}
+
+	return groups
+}
+
+// printPodGroups renders grouped agent output.
+func printPodGroups(groups []podGroup, unresponsive []string) {
+	if len(groups) == 0 && len(unresponsive) == 0 {
+		fmt.Println("No matching agents.")
+		return
+	}
+
+	hasPods := false
+	for _, g := range groups {
+		if g.Pod != "" {
+			hasPods = true
+			break
+		}
+	}
+
+	for i, g := range groups {
+		if i > 0 {
+			fmt.Println()
+		}
+
+		// Print group header.
+		if hasPods || len(groups) > 1 {
+			if g.Pod != "" {
+				fmt.Printf("\033[1mAgents (pod: %s)\033[0m\n", g.Pod)
+			} else {
+				fmt.Printf("\033[1mAgents (no pod)\033[0m\n")
+			}
+		} else {
+			fmt.Printf("\033[1mAgents\033[0m\n")
+		}
+
+		for _, info := range g.Agents {
+			printAgentLine(info)
+		}
+	}
+
+	for _, name := range unresponsive {
+		fmt.Printf("  \033[31m✗\033[0m %s \033[2m(not responding)\033[0m\n", name)
 	}
 }
 

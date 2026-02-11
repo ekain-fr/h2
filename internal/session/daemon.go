@@ -39,6 +39,7 @@ type RunDaemonOpts struct {
 	SessionDir      string
 	ClaudeConfigDir string
 	Heartbeat       DaemonHeartbeat
+	Overrides       map[string]string // --override key=value pairs for metadata
 }
 
 // RunDaemon creates a Session and Daemon, sets up the socket, and runs
@@ -92,6 +93,7 @@ func RunDaemon(opts RunDaemonOpts) error {
 			ClaudeCodeSessionLogPath: config.ClaudeCodeSessionLogPath(s.ClaudeConfigDir, cwd, opts.SessionID),
 			Command:                opts.Command,
 			Role:                   opts.RoleName,
+			Overrides:              opts.Overrides,
 			StartedAt:              s.StartTime.UTC().Format(time.RFC3339),
 		}
 		if err := config.WriteSessionMetadata(s.SessionDir, meta); err != nil {
@@ -129,6 +131,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 		Command:          s.Command,
 		SessionID:        s.SessionID,
 		RoleName:         s.RoleName,
+		Pod:              os.Getenv("H2_POD"),
 		Uptime:           virtualterminal.FormatIdleDuration(uptime),
 		State:            st.String(),
 		SubState:         sub.String(),
@@ -223,8 +226,9 @@ type ForkDaemonOpts struct {
 	SessionDir      string
 	ClaudeConfigDir string
 	Heartbeat       DaemonHeartbeat
-	CWD             string // working directory for the child process
-	Pod             string // pod name (set as H2_POD env var)
+	CWD             string   // working directory for the child process
+	Pod             string   // pod name (set as H2_POD env var)
+	Overrides       []string // --override key=value pairs (recorded in session metadata)
 }
 
 // ForkDaemon starts a daemon in a background process by re-execing with
@@ -251,6 +255,9 @@ func ForkDaemon(opts ForkDaemonOpts) error {
 		if opts.Heartbeat.Condition != "" {
 			daemonArgs = append(daemonArgs, "--heartbeat-condition", opts.Heartbeat.Condition)
 		}
+	}
+	for _, ov := range opts.Overrides {
+		daemonArgs = append(daemonArgs, "--override", ov)
 	}
 	daemonArgs = append(daemonArgs, "--")
 	daemonArgs = append(daemonArgs, opts.Command)

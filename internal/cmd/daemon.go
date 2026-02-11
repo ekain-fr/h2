@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"h2/internal/config"
 	"h2/internal/session"
 )
 
@@ -20,6 +21,7 @@ func newDaemonCmd() *cobra.Command {
 	var heartbeatIdleTimeout string
 	var heartbeatMessage string
 	var heartbeatCondition string
+	var overrides []string
 
 	cmd := &cobra.Command{
 		Use:    "_daemon --name=<name> -- <command> [args...]",
@@ -44,6 +46,16 @@ func newDaemonCmd() *cobra.Command {
 				}
 			}
 
+			// Parse override key=value strings into a map for metadata.
+			var overrideMap map[string]string
+			if len(overrides) > 0 {
+				var err error
+				overrideMap, err = config.ParseOverrides(overrides)
+				if err != nil {
+					return fmt.Errorf("parse overrides: %w", err)
+				}
+			}
+
 			err := session.RunDaemon(session.RunDaemonOpts{
 				Name:            name,
 				SessionID:       sessionID,
@@ -53,6 +65,7 @@ func newDaemonCmd() *cobra.Command {
 				SessionDir:      sessionDir,
 				ClaudeConfigDir: claudeConfigDir,
 				Heartbeat:       heartbeat,
+				Overrides:       overrideMap,
 			})
 			if err != nil {
 				if _, ok := err.(*exec.ExitError); ok {
@@ -72,6 +85,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&heartbeatIdleTimeout, "heartbeat-idle-timeout", "", "Heartbeat idle timeout duration")
 	cmd.Flags().StringVar(&heartbeatMessage, "heartbeat-message", "", "Heartbeat nudge message")
 	cmd.Flags().StringVar(&heartbeatCondition, "heartbeat-condition", "", "Heartbeat condition command")
+	cmd.Flags().StringArrayVar(&overrides, "override", nil, "Override key=value pairs (internal)")
 
 	return cmd
 }

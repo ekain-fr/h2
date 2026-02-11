@@ -50,6 +50,13 @@ type H2Result struct {
 	ExitCode int
 }
 
+// h2Opts configures a single h2 command invocation.
+type h2Opts struct {
+	h2Dir    string   // H2_DIR env var (empty = unset)
+	workDir  string   // working directory for the process
+	extraEnv []string // additional KEY=VALUE env vars
+}
+
 // createTestH2Dir creates a temp h2 directory by running h2 init.
 // Returns the absolute path. Cleanup is automatic via t.Cleanup.
 func createTestH2Dir(t *testing.T) string {
@@ -69,38 +76,24 @@ func createTestH2Dir(t *testing.T) string {
 // H2_DIR is set in the environment. Returns stdout, stderr, and exit code.
 func runH2(t *testing.T, h2Dir string, args ...string) H2Result {
 	t.Helper()
-
-	cmd := exec.Command(h2Binary, args...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Start with a clean env to avoid inheriting the test runner's H2_DIR.
-	cmd.Env = append(os.Environ(), "H2_DIR=")
-	if h2Dir != "" {
-		cmd.Env = append(cmd.Env, "H2_DIR="+h2Dir)
-	}
-
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("h2 command failed to execute: %v", err)
-		}
-	}
-
-	return H2Result{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-	}
+	return runH2Opts(t, h2Opts{h2Dir: h2Dir}, args...)
 }
 
 // runH2WithEnv executes h2 with additional environment variables.
 // extraEnv entries are in "KEY=VALUE" format and override os.Environ().
 func runH2WithEnv(t *testing.T, h2Dir string, extraEnv []string, args ...string) H2Result {
+	t.Helper()
+	return runH2Opts(t, h2Opts{h2Dir: h2Dir, extraEnv: extraEnv}, args...)
+}
+
+// runH2InDir executes h2 in the given working directory.
+func runH2InDir(t *testing.T, workDir string, extraEnv []string, args ...string) H2Result {
+	t.Helper()
+	return runH2Opts(t, h2Opts{workDir: workDir, extraEnv: extraEnv}, args...)
+}
+
+// runH2Opts is the core helper that all runH2* functions delegate to.
+func runH2Opts(t *testing.T, opts h2Opts, args ...string) H2Result {
 	t.Helper()
 
 	cmd := exec.Command(h2Binary, args...)
@@ -108,11 +101,16 @@ func runH2WithEnv(t *testing.T, h2Dir string, extraEnv []string, args ...string)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	cmd.Env = append(os.Environ(), "H2_DIR=")
-	if h2Dir != "" {
-		cmd.Env = append(cmd.Env, "H2_DIR="+h2Dir)
+	if opts.workDir != "" {
+		cmd.Dir = opts.workDir
 	}
-	cmd.Env = append(cmd.Env, extraEnv...)
+
+	// Start with a clean env to avoid inheriting the test runner's H2_DIR.
+	cmd.Env = append(os.Environ(), "H2_DIR=")
+	if opts.h2Dir != "" {
+		cmd.Env = append(cmd.Env, "H2_DIR="+opts.h2Dir)
+	}
+	cmd.Env = append(cmd.Env, opts.extraEnv...)
 
 	err := cmd.Run()
 	exitCode := 0
@@ -151,10 +149,10 @@ func createPodTemplate(t *testing.T, h2Dir, name, content string) {
 
 // waitForSocket polls for a socket file to appear under h2Dir/sockets/.
 // socketType is "agent" or "bridge", name is the agent/bridge name.
+// Socket naming convention: sockets/<type>.<name>.sock
 func waitForSocket(t *testing.T, h2Dir, socketType, name string) {
 	t.Helper()
-	// Socket naming convention: sockets/<type>-<name>.sock
-	sockPath := filepath.Join(h2Dir, "sockets", fmt.Sprintf("%s-%s.sock", socketType, name))
+	sockPath := filepath.Join(h2Dir, "sockets", fmt.Sprintf("%s.%s.sock", socketType, name))
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

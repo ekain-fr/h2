@@ -17,6 +17,8 @@ func newRunCmd() *cobra.Command {
 	var roleName string
 	var agentType string
 	var command string
+	var pod string
+	var overrides []string
 
 	cmd := &cobra.Command{
 		Use:   "run [flags]",
@@ -30,6 +32,13 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
   h2 run --agent-type claude    Run an agent type without a role
   h2 run --command "vim"        Run an explicit command`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Validate pod name if provided.
+			if pod != "" {
+				if err := config.ValidatePodName(pod); err != nil {
+					return err
+				}
+			}
+
 			var cmdCommand string
 			var cmdArgs []string
 			var heartbeat session.DaemonHeartbeat
@@ -71,7 +80,12 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 					}
 					return fmt.Errorf("load role %q: %w", roleName, err)
 				}
-				return setupAndForkAgent(name, role, detach)
+				if len(overrides) > 0 {
+					if err := config.ApplyOverrides(role, overrides); err != nil {
+						return fmt.Errorf("apply overrides: %w", err)
+					}
+				}
+				return setupAndForkAgent(name, role, detach, pod, overrides)
 			}
 
 			// Agent-type or command mode: fork without a role.
@@ -88,6 +102,7 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 				Command:   cmdCommand,
 				Args:      cmdArgs,
 				Heartbeat: heartbeat,
+				Pod:       pod,
 			}); err != nil {
 				return err
 			}
@@ -107,6 +122,8 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 	cmd.Flags().StringVar(&roleName, "role", "", "Role to use (defaults to 'default')")
 	cmd.Flags().StringVar(&agentType, "agent-type", "", "Agent type to run without a role (e.g. claude)")
 	cmd.Flags().StringVar(&command, "command", "", "Explicit command to run without a role")
+	cmd.Flags().StringVar(&pod, "pod", "", "Pod name for the agent (sets H2_POD env var)")
+	cmd.Flags().StringArrayVar(&overrides, "override", nil, "Override role field (key=value, e.g. worktree.enabled=true)")
 
 	return cmd
 }

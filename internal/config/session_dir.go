@@ -43,14 +43,15 @@ func SetupSessionDir(agentName string, role *Role) (string, error) {
 // SessionMetadata holds metadata about a running session, written to
 // ~/.h2/sessions/<name>/session.metadata.json for use by h2 peek and other tools.
 type SessionMetadata struct {
-	AgentName              string `json:"agent_name"`
-	SessionID              string `json:"session_id"`
-	ClaudeConfigDir        string `json:"claude_config_dir"`
-	CWD                    string `json:"cwd"`
-	ClaudeCodeSessionLogPath string `json:"claude_code_session_log_path"`
-	Command                string `json:"command"`
-	Role                   string `json:"role,omitempty"`
-	StartedAt              string `json:"started_at"`
+	AgentName              string            `json:"agent_name"`
+	SessionID              string            `json:"session_id"`
+	ClaudeConfigDir        string            `json:"claude_config_dir"`
+	CWD                    string            `json:"cwd"`
+	ClaudeCodeSessionLogPath string          `json:"claude_code_session_log_path"`
+	Command                string            `json:"command"`
+	Role                   string            `json:"role,omitempty"`
+	Overrides              map[string]string `json:"overrides,omitempty"`
+	StartedAt              string            `json:"started_at"`
 }
 
 // ClaudeCodeSessionLogPath computes the path to Claude Code's session transcript JSONL.
