@@ -169,6 +169,73 @@ func TestPodStopCmd_NoPodAgents(t *testing.T) {
 	}
 }
 
+func TestPodRunningAgents(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+	sockDir := filepath.Join(h2Root, "sockets")
+
+	// Create two mock agents: one in "my-pod", one in "other-pod".
+	type mockAgent struct {
+		name string
+		pod  string
+	}
+	agents := []mockAgent{
+		{name: "coder", pod: "my-pod"},
+		{name: "reviewer", pod: "my-pod"},
+		{name: "unrelated", pod: "other-pod"},
+	}
+
+	var listeners []net.Listener
+	for _, a := range agents {
+		sockPath := filepath.Join(sockDir, socketdir.Format(socketdir.TypeAgent, a.name))
+		ln, err := net.Listen("unix", sockPath)
+		if err != nil {
+			t.Fatalf("listen %s: %v", a.name, err)
+		}
+		listeners = append(listeners, ln)
+
+		go func(agent mockAgent, listener net.Listener) {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				req, err := message.ReadRequest(conn)
+				if err != nil {
+					conn.Close()
+					return
+				}
+				if req.Type == "status" {
+					message.SendResponse(conn, &message.Response{
+						OK: true,
+						Agent: &message.AgentInfo{
+							Name: agent.name,
+							Pod:  agent.pod,
+						},
+					})
+				}
+				conn.Close()
+			}
+		}(a, ln)
+	}
+	t.Cleanup(func() {
+		for _, ln := range listeners {
+			ln.Close()
+		}
+	})
+
+	running := podRunningAgents("my-pod")
+
+	if !running["coder"] {
+		t.Error("expected coder to be running in my-pod")
+	}
+	if !running["reviewer"] {
+		t.Error("expected reviewer to be running in my-pod")
+	}
+	if running["unrelated"] {
+		t.Error("expected unrelated to NOT be in my-pod")
+	}
+}
+
 func TestPodLaunchCmd_RequiresArg(t *testing.T) {
 	cmd := newPodLaunchCmd()
 	cmd.SetArgs([]string{})

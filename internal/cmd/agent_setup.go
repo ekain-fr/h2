@@ -14,7 +14,17 @@ import (
 // setupAndForkAgent sets up the agent session, forks the daemon,
 // and optionally attaches to it. This is shared by both 'h2 run' and 'h2 bridge'.
 // The caller is responsible for loading the role and applying any overrides.
+// setupAndForkAgentQuiet is like setupAndForkAgent but suppresses output.
+// Used by pod launch which handles its own output.
+func setupAndForkAgentQuiet(name string, role *config.Role, pod string, overrides []string) error {
+	return doSetupAndForkAgent(name, role, true, pod, overrides, true)
+}
+
 func setupAndForkAgent(name string, role *config.Role, detach bool, pod string, overrides []string) error {
+	return doSetupAndForkAgent(name, role, detach, pod, overrides, false)
+}
+
+func doSetupAndForkAgent(name string, role *config.Role, detach bool, pod string, overrides []string, quiet bool) error {
 	if name == "" {
 		name = session.GenerateName()
 	}
@@ -85,10 +95,14 @@ func setupAndForkAgent(name string, role *config.Role, detach bool, pod string, 
 	}
 
 	if detach {
-		fmt.Fprintf(os.Stderr, "Agent %q started (detached). Use 'h2 attach %s' to connect.\n", name, name)
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "Agent %q started (detached). Use 'h2 attach %s' to connect.\n", name, name)
+		}
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Agent %q started. Attaching...\n", name)
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "Agent %q started. Attaching...\n", name)
+	}
 	return doAttach(name)
 }

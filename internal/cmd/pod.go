@@ -56,25 +56,43 @@ func newPodLaunchCmd() *cobra.Command {
 				return fmt.Errorf("template %q has no agents", templateName)
 			}
 
+			// Build a set of already-running agents in this pod.
+			running := podRunningAgents(pod)
+
+			var started, skipped int
 			for _, agent := range tmpl.Agents {
+				if running[agent.Name] {
+					fmt.Fprintf(os.Stderr, "  %s already running\n", agent.Name)
+					skipped++
+					continue
+				}
+
 				roleName := agent.Role
 				if roleName == "" {
 					roleName = "default"
 				}
 
-				// Load role using pod role resolution.
 				role, err := config.LoadPodRole(roleName)
 				if err != nil {
 					return fmt.Errorf("load role %q for agent %q: %w", roleName, agent.Name, err)
 				}
 
-				if err := setupAndForkAgent(agent.Name, role, true, pod, nil); err != nil {
+				if err := setupAndForkAgentQuiet(agent.Name, role, pod, nil); err != nil {
 					return fmt.Errorf("start agent %q: %w", agent.Name, err)
 				}
-				fmt.Fprintf(os.Stderr, "Started agent %q in pod %q\n", agent.Name, pod)
+				fmt.Fprintf(os.Stderr, "  %s started\n", agent.Name)
+				started++
 			}
 
-			fmt.Fprintf(os.Stderr, "Pod %q launched with %d agents\n", pod, len(tmpl.Agents))
+			// Summary line.
+			switch {
+			case skipped == 0:
+				fmt.Fprintf(os.Stderr, "Pod %q launched with %d agents\n", pod, started)
+			case started == 0:
+				fmt.Fprintf(os.Stderr, "Pod %q: all %d agents already running\n", pod, skipped)
+			default:
+				fmt.Fprintf(os.Stderr, "Pod %q: %d started, %d already running\n", pod, started, skipped)
+			}
 			return nil
 		},
 	}
@@ -135,6 +153,22 @@ func newPodStopCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// podRunningAgents returns a set of agent names currently running in the given pod.
+func podRunningAgents(pod string) map[string]bool {
+	running := make(map[string]bool)
+	entries, err := socketdir.ListByType(socketdir.TypeAgent)
+	if err != nil {
+		return running
+	}
+	for _, e := range entries {
+		info := queryAgent(e.Path)
+		if info != nil && info.Pod == pod {
+			running[info.Name] = true
+		}
+	}
+	return running
 }
 
 func newPodListCmd() *cobra.Command {
