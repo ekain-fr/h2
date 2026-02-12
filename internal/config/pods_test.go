@@ -1164,3 +1164,114 @@ instructions: |
 		t.Errorf("instructions should contain 'Static': %q", role.Instructions)
 	}
 }
+
+// --- Template detection flexibility tests ---
+
+func TestExpandPodAgents_NoSpaceTemplateIndex(t *testing.T) {
+	// {{.Index}} without spaces should also be detected as a template.
+	pt := &PodTemplate{
+		Agents: []PodTemplateAgent{
+			{Name: "coder-{{.Index}}", Role: "coding", Count: intPtr(3)},
+		},
+	}
+	agents, err := ExpandPodAgents(pt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(agents) != 3 {
+		t.Fatalf("expected 3 agents, got %d", len(agents))
+	}
+	for i, a := range agents {
+		expected := fmt.Sprintf("coder-%d", i+1)
+		if a.Name != expected {
+			t.Errorf("agent %d: name = %q, want %q", i, a.Name, expected)
+		}
+	}
+}
+
+func TestExpandPodAgents_TrimSpaceTemplateIndex(t *testing.T) {
+	// {{- .Index }} with trim markers should also work.
+	pt := &PodTemplate{
+		Agents: []PodTemplateAgent{
+			{Name: "coder-{{- .Index }}", Role: "coding", Count: intPtr(2)},
+		},
+	}
+	agents, err := ExpandPodAgents(pt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(agents))
+	}
+	for i, a := range agents {
+		expected := fmt.Sprintf("coder-%d", i+1)
+		if a.Name != expected {
+			t.Errorf("agent %d: name = %q, want %q", i, a.Name, expected)
+		}
+	}
+}
+
+// --- ctx.Var mutation protection tests ---
+
+func TestParsePodTemplateRendered_DoesNotMutateCTXVar(t *testing.T) {
+	yamlText := `variables:
+  greeting:
+    default: hello
+
+pod_name: test
+agents:
+  - name: agent-{{ .Var.greeting }}
+    role: greeter
+`
+	originalVars := map[string]string{"other": "val"}
+	ctx := &tmpl.Context{PodName: "test", Var: originalVars}
+
+	_, err := ParsePodTemplateRendered(yamlText, "test", ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// ctx.Var should NOT have "greeting" added to it.
+	if _, ok := ctx.Var["greeting"]; ok {
+		t.Error("ParsePodTemplateRendered should not mutate caller's ctx.Var map")
+	}
+	if ctx.Var["other"] != "val" {
+		t.Error("original var should be preserved")
+	}
+}
+
+func TestLoadRoleRenderedFrom_DoesNotMutateCTXVar(t *testing.T) {
+	h2Dir := setupTestH2Dir(t)
+
+	roleContent := `name: with-default
+variables:
+  env:
+    description: "Environment"
+    default: "dev"
+instructions: |
+  Env: {{ .Var.env }}
+`
+	rolePath := filepath.Join(h2Dir, "roles", "with-default.yaml")
+	os.WriteFile(rolePath, []byte(roleContent), 0o644)
+
+	originalVars := map[string]string{"other": "val"}
+	ctx := &tmpl.Context{
+		AgentName: "worker",
+		RoleName:  "with-default",
+		H2Dir:     h2Dir,
+		Var:       originalVars,
+	}
+
+	_, err := LoadRoleRenderedFrom(rolePath, ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// ctx.Var should NOT have "env" added to it.
+	if _, ok := ctx.Var["env"]; ok {
+		t.Error("LoadRoleRenderedFrom should not mutate caller's ctx.Var map")
+	}
+	if ctx.Var["other"] != "val" {
+		t.Error("original var should be preserved")
+	}
+}

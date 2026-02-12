@@ -50,38 +50,40 @@ func Render(templateText string, ctx *Context) (string, error) {
 // ParseVarDefs extracts variable definitions from raw YAML text.
 // Returns the definitions and the YAML text with the variables section removed.
 // The variables section must not contain template expressions.
+//
+// This uses string-based extraction (not full YAML parsing) so the rest of the
+// document can contain template expressions like {{ if }} that would break YAML syntax.
 func ParseVarDefs(yamlText string) (map[string]VarDef, string, error) {
-	// First, parse the full YAML to extract the variables section.
-	var doc map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte(yamlText), &doc); err != nil {
-		return nil, "", fmt.Errorf("parse YAML for variable extraction: %w", err)
-	}
-
-	varsNode, ok := doc["variables"]
-	if !ok {
+	// Extract just the variables block as raw text.
+	varsBlock, remaining := extractYAMLSection(yamlText, "variables")
+	if varsBlock == "" {
 		return nil, yamlText, nil
 	}
 
-	// Decode variables section into map[string]VarDef.
-	var defs map[string]VarDef
-	if err := varsNode.Decode(&defs); err != nil {
+	// Parse only the extracted variables block.
+	// Wrap it back with the "variables:" key so it's valid YAML.
+	varsYAML := "variables:\n" + varsBlock
+	var wrapper struct {
+		Variables map[string]VarDef `yaml:"variables"`
+	}
+	if err := yaml.Unmarshal([]byte(varsYAML), &wrapper); err != nil {
 		return nil, "", fmt.Errorf("parse variables section: %w", err)
 	}
+	defs := wrapper.Variables
 	if defs == nil {
 		defs = map[string]VarDef{}
 	}
 
-	// Remove the variables section from the YAML text.
-	// We do this by finding the "variables:" line and removing it plus its indented block.
-	remaining := removeYAMLSection(yamlText, "variables")
-
 	return defs, remaining, nil
 }
 
-// removeYAMLSection removes a top-level YAML key and its block from the text.
-func removeYAMLSection(yamlText string, key string) string {
+// extractYAMLSection finds a top-level YAML key, extracts its indented block,
+// and returns (block text, remaining text without the section).
+// Returns ("", original text) if the key is not found.
+func extractYAMLSection(yamlText string, key string) (string, string) {
 	lines := strings.Split(yamlText, "\n")
-	var result []string
+	var remaining []string
+	var block []string
 	inSection := false
 	prefix := key + ":"
 
@@ -91,28 +93,34 @@ func removeYAMLSection(yamlText string, key string) string {
 		if !inSection {
 			if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
 				inSection = true
+				// Check for inline value (e.g., "variables: {}")
+				after := strings.TrimPrefix(trimmed, prefix)
+				after = strings.TrimSpace(after)
+				if after != "" {
+					// Inline value — treat entire value as block.
+					block = append(block, "  "+after)
+				}
 				continue
 			}
-			result = append(result, line)
+			remaining = append(remaining, line)
 		} else {
-			// We're inside the section. Stay in it while lines are indented
-			// (or blank). Exit when we hit a non-indented, non-blank line.
 			if trimmed == "" {
 				// Blank lines inside the section are consumed.
+				block = append(block, line)
 				continue
 			}
-			// Check if this line is indented (belongs to the section).
 			if line != trimmed {
 				// Line has leading whitespace — still in section.
+				block = append(block, line)
 				continue
 			}
 			// Non-indented, non-blank line — section is over.
 			inSection = false
-			result = append(result, line)
+			remaining = append(remaining, line)
 		}
 	}
 
-	return strings.Join(result, "\n")
+	return strings.Join(block, "\n"), strings.Join(remaining, "\n")
 }
 
 // ValidateVars checks that all required variables (no default) are provided.

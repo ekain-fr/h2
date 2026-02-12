@@ -871,6 +871,67 @@ instructions: |
 	})
 }
 
+func TestParseVarDefs_StructuralTemplateExpressions(t *testing.T) {
+	t.Run("if/end in YAML list", func(t *testing.T) {
+		// This YAML has template expressions that break YAML syntax.
+		// ParseVarDefs must NOT try to YAML-parse the full document.
+		input := `variables:
+  include_reviewer:
+    description: "Whether to include reviewer"
+    default: "true"
+pod_name: dev-team
+agents:
+  - role: concierge
+    name: concierge
+  {{ if .Var.include_reviewer }}
+  - role: reviewer
+    name: reviewer
+  {{ end }}
+`
+		defs, remaining, err := ParseVarDefs(input)
+		if err != nil {
+			t.Fatalf("ParseVarDefs should succeed with structural templates: %v", err)
+		}
+		if len(defs) != 1 {
+			t.Fatalf("got %d defs, want 1", len(defs))
+		}
+		if defs["include_reviewer"].Required() {
+			t.Error("include_reviewer should be optional")
+		}
+		if !strings.Contains(remaining, "{{ if .Var.include_reviewer }}") {
+			t.Error("remaining should preserve template expressions")
+		}
+		if !strings.Contains(remaining, "{{ end }}") {
+			t.Error("remaining should preserve {{ end }}")
+		}
+		if strings.Contains(remaining, "variables:") {
+			t.Error("remaining should not contain variables: section")
+		}
+	})
+
+	t.Run("range loop producing YAML list items", func(t *testing.T) {
+		input := `variables:
+  services:
+    default: "api,web"
+agents:
+  {{ range $svc := split .Var.services "," }}
+  - role: coding
+    name: "{{ $svc }}-coder"
+  {{ end }}
+`
+		defs, remaining, err := ParseVarDefs(input)
+		if err != nil {
+			t.Fatalf("ParseVarDefs should succeed with range template: %v", err)
+		}
+		if len(defs) != 1 {
+			t.Fatalf("got %d defs, want 1", len(defs))
+		}
+		if !strings.Contains(remaining, "{{ range") {
+			t.Error("remaining should preserve range expression")
+		}
+	})
+}
+
 // --- Helpers ---
 
 func strPtr(s string) *string {
