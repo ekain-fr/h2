@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"h2/internal/config"
+	s "h2/internal/termstyle"
 )
 
 func newRoleCmd() *cobra.Command {
@@ -46,10 +47,10 @@ func newRoleListCmd() *cobra.Command {
 			// If pod roles exist, show grouped output.
 			if len(podRoles) > 0 {
 				if len(globalRoles) > 0 {
-					fmt.Printf("\033[1mGlobal roles\033[0m\n")
+					fmt.Printf("%s\n", s.Bold("Global roles"))
 					printRoleList(globalRoles)
 				}
-				fmt.Printf("\033[1mPod roles\033[0m\n")
+				fmt.Printf("%s\n", s.Bold("Pod roles"))
 				printRoleList(podRoles)
 			} else {
 				// No pod roles — flat output (backward compatible).
