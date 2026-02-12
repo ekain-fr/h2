@@ -29,23 +29,44 @@ func newRoleListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List available roles",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			roles, err := config.ListRoles()
+			globalRoles, err := config.ListRoles()
 			if err != nil {
 				return err
 			}
-			if len(roles) == 0 {
+			podRoles, err := config.ListPodRoles()
+			if err != nil {
+				return err
+			}
+
+			if len(globalRoles) == 0 && len(podRoles) == 0 {
 				fmt.Printf("No roles found in %s\n", config.RolesDir())
 				return nil
 			}
-			for _, r := range roles {
-				desc := r.Description
-				if desc == "" {
-					desc = "(no description)"
+
+			// If pod roles exist, show grouped output.
+			if len(podRoles) > 0 {
+				if len(globalRoles) > 0 {
+					fmt.Printf("\033[1mGlobal roles\033[0m\n")
+					printRoleList(globalRoles)
 				}
-				fmt.Printf("%-16s %s\n", r.Name, desc)
+				fmt.Printf("\033[1mPod roles\033[0m\n")
+				printRoleList(podRoles)
+			} else {
+				// No pod roles — flat output (backward compatible).
+				printRoleList(globalRoles)
 			}
 			return nil
 		},
+	}
+}
+
+func printRoleList(roles []*config.Role) {
+	for _, r := range roles {
+		desc := r.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		fmt.Printf("  %-16s %s\n", r.Name, desc)
 	}
 }
 
@@ -109,7 +130,8 @@ func newRoleInitCmd() *cobra.Command {
 				return fmt.Errorf("role %q already exists at %s", name, path)
 			}
 
-			template := roleTemplate(name)
+			claudeConfigDir := config.DefaultClaudeConfigDir()
+			template := roleTemplate(name, claudeConfigDir)
 
 			if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
 				return fmt.Errorf("write role file: %w", err)
@@ -123,16 +145,16 @@ func newRoleInitCmd() *cobra.Command {
 
 // roleTemplate returns the YAML template for a role, with special templates
 // for well-known role names (e.g. "concierge").
-func roleTemplate(name string) string {
+func roleTemplate(name, claudeConfigDir string) string {
 	switch name {
 	case "concierge":
-		return conciergeRoleTemplate(name)
+		return conciergeRoleTemplate(name, claudeConfigDir)
 	default:
-		return defaultRoleTemplate(name)
+		return defaultRoleTemplate(name, claudeConfigDir)
 	}
 }
 
-func defaultRoleTemplate(name string) string {
+func defaultRoleTemplate(name, claudeConfigDir string) string {
 	return fmt.Sprintf(`name: %s
 description: "A %s agent for h2"
 
@@ -145,7 +167,7 @@ model: opus
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.
 # Set to ~/ to use the system default (no override).
-claude_config_dir: ~/.h2/claude-config/default
+claude_config_dir: %s
 
 instructions: |
   You are a %s agent running in h2, a terminal multiplexer with inter-agent messaging.
@@ -216,10 +238,10 @@ permissions:
       Remember: h2 messages are part of normal agent operation - allow them
       unless they contain credentials or other sensitive data. Normal file cleanup
       like "rm -rf node_modules" or "rm -rf logs/" is fine.
-`, name, name, name, name)
+`, name, name, claudeConfigDir, name, name)
 }
 
-func conciergeRoleTemplate(name string) string {
+func conciergeRoleTemplate(name, claudeConfigDir string) string {
 	return fmt.Sprintf(`name: %s
 description: "The concierge agent — your primary interface in h2"
 
@@ -232,7 +254,7 @@ model: opus
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.
 # Set to ~/ to use the system default (no override).
-claude_config_dir: ~/.h2/claude-config/default
+claude_config_dir: %s
 
 instructions: |
   You are the concierge — the primary agent the user interacts with in h2.
@@ -331,7 +353,7 @@ permissions:
       Remember: h2 messages are part of normal agent operation - allow them
       unless they contain credentials or other sensitive data. Normal file cleanup
       like "rm -rf node_modules" or "rm -rf logs/" is fine.
-`, name, name)
+`, name, claudeConfigDir, name)
 }
 
 func newRoleCheckCmd() *cobra.Command {

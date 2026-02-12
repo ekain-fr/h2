@@ -7,23 +7,24 @@ import (
 	"github.com/google/uuid"
 
 	"h2/internal/config"
+	"h2/internal/git"
 	"h2/internal/session"
 )
 
-// setupAndForkAgent loads a role, sets up the agent session, forks the daemon,
+// setupAndForkAgent sets up the agent session, forks the daemon,
 // and optionally attaches to it. This is shared by both 'h2 run' and 'h2 bridge'.
-func setupAndForkAgent(name, roleName string, detach bool) error {
-	role, err := config.LoadRole(roleName)
-	if err != nil {
-		if roleName == "concierge" {
-			return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
-		}
-		if roleName == "default" {
-			return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
-		}
-		return fmt.Errorf("load role %q: %w", roleName, err)
-	}
+// The caller is responsible for loading the role and applying any overrides.
+// setupAndForkAgentQuiet is like setupAndForkAgent but suppresses output.
+// Used by pod launch which handles its own output.
+func setupAndForkAgentQuiet(name string, role *config.Role, pod string, overrides []string) error {
+	return doSetupAndForkAgent(name, role, true, pod, overrides, true)
+}
 
+func setupAndForkAgent(name string, role *config.Role, detach bool, pod string, overrides []string) error {
+	return doSetupAndForkAgent(name, role, detach, pod, overrides, false)
+}
+
+func doSetupAndForkAgent(name string, role *config.Role, detach bool, pod string, overrides []string, quiet bool) error {
 	if name == "" {
 		name = session.GenerateName()
 	}
@@ -54,18 +55,54 @@ func setupAndForkAgent(name, roleName string, detach bool) error {
 		}
 	}
 
+	// Resolve the working directory for the agent.
+	var agentCWD string
+	if role.Worktree != nil {
+		// Worktree mode: create/reuse worktree, CWD = worktree path.
+		worktreePath, err := git.CreateWorktree(role.Worktree)
+		if err != nil {
+			return fmt.Errorf("create worktree: %w", err)
+		}
+		agentCWD = worktreePath
+	} else {
+		// Normal mode: resolve working_dir.
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get working directory: %w", err)
+		}
+		agentCWD, err = role.ResolveWorkingDir(cwd)
+		if err != nil {
+			return fmt.Errorf("resolve working_dir: %w", err)
+		}
+	}
+
 	sessionID := uuid.New().String()
 
 	// Fork the daemon.
-	if err := session.ForkDaemon(name, sessionID, cmdCommand, nil, roleName, sessionDir, claudeConfigDir, heartbeat); err != nil {
+	if err := session.ForkDaemon(session.ForkDaemonOpts{
+		Name:            name,
+		SessionID:       sessionID,
+		Command:         cmdCommand,
+		RoleName:        role.Name,
+		SessionDir:      sessionDir,
+		ClaudeConfigDir: claudeConfigDir,
+		Heartbeat:       heartbeat,
+		CWD:             agentCWD,
+		Pod:             pod,
+		Overrides:       overrides,
+	}); err != nil {
 		return err
 	}
 
 	if detach {
-		fmt.Fprintf(os.Stderr, "Agent %q started (detached). Use 'h2 attach %s' to connect.\n", name, name)
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "Agent %q started (detached). Use 'h2 attach %s' to connect.\n", name, name)
+		}
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Agent %q started. Attaching...\n", name)
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "Agent %q started. Attaching...\n", name)
+	}
 	return doAttach(name)
 }

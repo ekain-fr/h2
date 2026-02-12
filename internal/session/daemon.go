@@ -29,17 +29,30 @@ type DaemonHeartbeat struct {
 	Condition   string
 }
 
+// RunDaemonOpts holds all options for running a daemon.
+type RunDaemonOpts struct {
+	Name            string
+	SessionID       string
+	Command         string
+	Args            []string
+	RoleName        string
+	SessionDir      string
+	ClaudeConfigDir string
+	Heartbeat       DaemonHeartbeat
+	Overrides       map[string]string // --override key=value pairs for metadata
+}
+
 // RunDaemon creates a Session and Daemon, sets up the socket, and runs
 // the session in daemon mode. This is the main entry point for the _daemon command.
-func RunDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, heartbeat DaemonHeartbeat) error {
-	s := New(name, command, args)
-	s.SessionID = sessionID
-	s.RoleName = roleName
-	s.SessionDir = sessionDir
-	s.ClaudeConfigDir = claudeConfigDir
-	s.HeartbeatIdleTimeout = heartbeat.IdleTimeout
-	s.HeartbeatMessage = heartbeat.Message
-	s.HeartbeatCondition = heartbeat.Condition
+func RunDaemon(opts RunDaemonOpts) error {
+	s := New(opts.Name, opts.Command, opts.Args)
+	s.SessionID = opts.SessionID
+	s.RoleName = opts.RoleName
+	s.SessionDir = opts.SessionDir
+	s.ClaudeConfigDir = opts.ClaudeConfigDir
+	s.HeartbeatIdleTimeout = opts.Heartbeat.IdleTimeout
+	s.HeartbeatMessage = opts.Heartbeat.Message
+	s.HeartbeatCondition = opts.Heartbeat.Condition
 	s.StartTime = time.Now()
 
 	// Create socket directory.
@@ -47,14 +60,14 @@ func RunDaemon(name, sessionID, command string, args []string, roleName, session
 		return fmt.Errorf("create socket dir: %w", err)
 	}
 
-	sockPath := socketdir.Path(socketdir.TypeAgent, name)
+	sockPath := socketdir.Path(socketdir.TypeAgent, opts.Name)
 
 	// Check if socket already exists.
 	if _, err := os.Stat(sockPath); err == nil {
 		conn, err := net.DialTimeout("unix", sockPath, 500*time.Millisecond)
 		if err == nil {
 			conn.Close()
-			return fmt.Errorf("agent %q is already running", name)
+			return fmt.Errorf("agent %q is already running", opts.Name)
 		}
 		os.Remove(sockPath)
 	}
@@ -73,13 +86,14 @@ func RunDaemon(name, sessionID, command string, args []string, roleName, session
 	if s.SessionDir != "" && s.ClaudeConfigDir != "" {
 		cwd, _ := os.Getwd()
 		meta := config.SessionMetadata{
-			AgentName:              name,
-			SessionID:              sessionID,
+			AgentName:              opts.Name,
+			SessionID:              opts.SessionID,
 			ClaudeConfigDir:        s.ClaudeConfigDir,
 			CWD:                    cwd,
-			ClaudeCodeSessionLogPath: config.ClaudeCodeSessionLogPath(s.ClaudeConfigDir, cwd, sessionID),
-			Command:                command,
-			Role:                   roleName,
+			ClaudeCodeSessionLogPath: config.ClaudeCodeSessionLogPath(s.ClaudeConfigDir, cwd, opts.SessionID),
+			Command:                opts.Command,
+			Role:                   opts.RoleName,
+			Overrides:              opts.Overrides,
 			StartedAt:              s.StartTime.UTC().Format(time.RFC3339),
 		}
 		if err := config.WriteSessionMetadata(s.SessionDir, meta); err != nil {
@@ -117,6 +131,7 @@ func (d *Daemon) AgentInfo() *message.AgentInfo {
 		Command:          s.Command,
 		SessionID:        s.SessionID,
 		RoleName:         s.RoleName,
+		Pod:              os.Getenv("H2_POD"),
 		Uptime:           virtualterminal.FormatIdleDuration(uptime),
 		State:            st.String(),
 		SubState:         sub.String(),
@@ -201,37 +216,71 @@ func gitStats() *gitDiffStats {
 	return parseGitDiffStats()
 }
 
+// ForkDaemonOpts holds all options for forking a daemon process.
+type ForkDaemonOpts struct {
+	Name            string
+	SessionID       string
+	Command         string
+	Args            []string
+	RoleName        string
+	SessionDir      string
+	ClaudeConfigDir string
+	Heartbeat       DaemonHeartbeat
+	CWD             string   // working directory for the child process
+	Pod             string   // pod name (set as H2_POD env var)
+	Overrides       []string // --override key=value pairs (recorded in session metadata)
+}
+
 // ForkDaemon starts a daemon in a background process by re-execing with
 // the hidden _daemon subcommand.
-func ForkDaemon(name, sessionID, command string, args []string, roleName, sessionDir, claudeConfigDir string, heartbeat DaemonHeartbeat) error {
+func ForkDaemon(opts ForkDaemonOpts) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
 	}
 
-	daemonArgs := []string{"_daemon", "--name", name, "--session-id", sessionID}
-	if roleName != "" {
-		daemonArgs = append(daemonArgs, "--role", roleName)
+	daemonArgs := []string{"_daemon", "--name", opts.Name, "--session-id", opts.SessionID}
+	if opts.RoleName != "" {
+		daemonArgs = append(daemonArgs, "--role", opts.RoleName)
 	}
-	if sessionDir != "" {
-		daemonArgs = append(daemonArgs, "--session-dir", sessionDir)
+	if opts.SessionDir != "" {
+		daemonArgs = append(daemonArgs, "--session-dir", opts.SessionDir)
 	}
-	if claudeConfigDir != "" {
-		daemonArgs = append(daemonArgs, "--claude-config-dir", claudeConfigDir)
+	if opts.ClaudeConfigDir != "" {
+		daemonArgs = append(daemonArgs, "--claude-config-dir", opts.ClaudeConfigDir)
 	}
-	if heartbeat.IdleTimeout > 0 {
-		daemonArgs = append(daemonArgs, "--heartbeat-idle-timeout", heartbeat.IdleTimeout.String())
-		daemonArgs = append(daemonArgs, "--heartbeat-message", heartbeat.Message)
-		if heartbeat.Condition != "" {
-			daemonArgs = append(daemonArgs, "--heartbeat-condition", heartbeat.Condition)
+	if opts.Heartbeat.IdleTimeout > 0 {
+		daemonArgs = append(daemonArgs, "--heartbeat-idle-timeout", opts.Heartbeat.IdleTimeout.String())
+		daemonArgs = append(daemonArgs, "--heartbeat-message", opts.Heartbeat.Message)
+		if opts.Heartbeat.Condition != "" {
+			daemonArgs = append(daemonArgs, "--heartbeat-condition", opts.Heartbeat.Condition)
 		}
 	}
+	for _, ov := range opts.Overrides {
+		daemonArgs = append(daemonArgs, "--override", ov)
+	}
 	daemonArgs = append(daemonArgs, "--")
-	daemonArgs = append(daemonArgs, command)
-	daemonArgs = append(daemonArgs, args...)
+	daemonArgs = append(daemonArgs, opts.Command)
+	daemonArgs = append(daemonArgs, opts.Args...)
 
 	cmd := exec.Command(exe, daemonArgs...)
 	cmd.SysProcAttr = NewSysProcAttr()
+
+	// Explicitly build environment: inherit parent env + additions.
+	env := os.Environ()
+	if h2Dir, err := config.ResolveDir(); err == nil {
+		env = append(env, "H2_DIR="+h2Dir)
+	}
+	if opts.Pod != "" {
+		env = append(env, "H2_POD="+opts.Pod)
+	}
+	cmd.Env = env
+
+	// Set working directory for the child process.
+	if opts.CWD != "" {
+		cmd.Dir = opts.CWD
+	}
+
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -257,7 +306,7 @@ func ForkDaemon(name, sessionID, command string, args []string, roleName, sessio
 	}()
 
 	// Wait for socket to appear.
-	sockPath := socketdir.Path(socketdir.TypeAgent, name)
+	sockPath := socketdir.Path(socketdir.TypeAgent, opts.Name)
 	for i := 0; i < 50; i++ {
 		time.Sleep(100 * time.Millisecond)
 		if _, err := os.Stat(sockPath); err == nil {

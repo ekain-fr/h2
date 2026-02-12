@@ -78,7 +78,11 @@ to route to an existing agent without spawning a new session.`,
 			}
 
 			// Setup and fork the concierge session from the role.
-			return setupAndForkAgent(conciergeSessionName, roleName, false)
+			role, err := config.LoadRole(roleName)
+			if err != nil {
+				return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
+			}
+			return setupAndForkAgent(conciergeSessionName, role, false, "", nil)
 		},
 	}
 

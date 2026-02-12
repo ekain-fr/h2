@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -506,6 +507,144 @@ func TestHeartbeatConfig_ParseIdleTimeout(t *testing.T) {
 	d, _ := k.ParseIdleTimeout()
 	if d != 30*1e9 { // 30 seconds in nanoseconds
 		t.Errorf("parsed duration = %v, want 30s", d)
+	}
+}
+
+func TestResolveWorkingDir_Default(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test"}
+	got, err := role.ResolveWorkingDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveWorkingDir: %v", err)
+	}
+	if got != "/my/cwd" {
+		t.Errorf("ResolveWorkingDir() = %q, want %q", got, "/my/cwd")
+	}
+}
+
+func TestResolveWorkingDir_Dot(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test", WorkingDir: "."}
+	got, err := role.ResolveWorkingDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveWorkingDir: %v", err)
+	}
+	if got != "/my/cwd" {
+		t.Errorf("ResolveWorkingDir(\".\") = %q, want %q", got, "/my/cwd")
+	}
+}
+
+func TestResolveWorkingDir_Absolute(t *testing.T) {
+	role := &Role{Name: "test", Instructions: "test", WorkingDir: "/some/absolute/path"}
+	got, err := role.ResolveWorkingDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveWorkingDir: %v", err)
+	}
+	if got != "/some/absolute/path" {
+		t.Errorf("ResolveWorkingDir(abs) = %q, want %q", got, "/some/absolute/path")
+	}
+}
+
+func TestResolveWorkingDir_Relative(t *testing.T) {
+	ResetResolveCache()
+	defer ResetResolveCache()
+
+	// Create a valid h2 dir so ResolveDir succeeds.
+	h2Dir := t.TempDir()
+	WriteMarker(h2Dir)
+	t.Setenv("H2_DIR", h2Dir)
+
+	role := &Role{Name: "test", Instructions: "test", WorkingDir: "projects/myapp"}
+	got, err := role.ResolveWorkingDir("/my/cwd")
+	if err != nil {
+		t.Fatalf("ResolveWorkingDir: %v", err)
+	}
+	want := filepath.Join(h2Dir, "projects/myapp")
+	if got != want {
+		t.Errorf("ResolveWorkingDir(rel) = %q, want %q", got, want)
+	}
+}
+
+func TestResolveWorkingDir_FromYAML(t *testing.T) {
+	yaml := `
+name: worker
+instructions: |
+  A worker agent.
+working_dir: /workspace/project
+`
+	path := writeTempFile(t, "worker.yaml", yaml)
+	role, err := LoadRoleFrom(path)
+	if err != nil {
+		t.Fatalf("LoadRoleFrom: %v", err)
+	}
+	if role.WorkingDir != "/workspace/project" {
+		t.Errorf("WorkingDir = %q, want %q", role.WorkingDir, "/workspace/project")
+	}
+}
+
+func TestValidate_WorktreeAndWorkingDirMutualExclusivity(t *testing.T) {
+	// worktree + non-trivial working_dir should fail.
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		WorkingDir:   "projects/myapp",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for worktree + working_dir")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error = %q, want it to contain 'mutually exclusive'", err.Error())
+	}
+
+	// worktree + working_dir="." should be OK.
+	role2 := &Role{
+		Name:         "test",
+		Instructions: "test",
+		WorkingDir:   ".",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	if err := role2.Validate(); err != nil {
+		t.Errorf("worktree + working_dir='.' should be allowed: %v", err)
+	}
+
+	// worktree + empty working_dir should be OK.
+	role3 := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo", Name: "test-wt"},
+	}
+	if err := role3.Validate(); err != nil {
+		t.Errorf("worktree + empty working_dir should be allowed: %v", err)
+	}
+}
+
+func TestValidate_WorktreeMissingProjectDir(t *testing.T) {
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{Name: "test-wt"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing project_dir")
+	}
+	if !strings.Contains(err.Error(), "project_dir") {
+		t.Errorf("error = %q, want it to contain 'project_dir'", err.Error())
+	}
+}
+
+func TestValidate_WorktreeMissingName(t *testing.T) {
+	role := &Role{
+		Name:         "test",
+		Instructions: "test",
+		Worktree:     &WorktreeConfig{ProjectDir: "/tmp/repo"},
+	}
+	err := role.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing worktree name")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("error = %q, want it to contain 'name'", err.Error())
 	}
 }
 

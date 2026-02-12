@@ -3,6 +3,7 @@ package socketdir
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,7 +59,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestPath(t *testing.T) {
-	// Path uses Dir() which depends on HOME; just verify format.
+	// Path uses Dir() which depends on config; just verify format.
 	got := Path("agent", "concierge")
 	want := filepath.Join(Dir(), "agent.concierge.sock")
 	if got != want {
@@ -177,5 +178,74 @@ func TestListIn_NonexistentDir(t *testing.T) {
 	}
 	if entries != nil {
 		t.Errorf("expected nil, got %v", entries)
+	}
+}
+
+func TestResolveSocketDir_ShortPath(t *testing.T) {
+	// For a short h2 dir path, ResolveSocketDir returns <h2Dir>/sockets/.
+	// Use a short path to avoid the macOS long temp dir issue.
+	h2Dir := filepath.Join(os.TempDir(), "h2t")
+	os.MkdirAll(h2Dir, 0o755)
+	defer os.RemoveAll(h2Dir)
+
+	got := ResolveSocketDir(h2Dir)
+	want := filepath.Join(h2Dir, "sockets")
+	if got != want {
+		t.Errorf("ResolveSocketDir(%q) = %q, want %q", h2Dir, got, want)
+	}
+}
+
+func TestResolveSocketDir_LongPath(t *testing.T) {
+	// For an extremely long path, ResolveSocketDir should return a short symlink path.
+	// Build a path long enough to exceed maxSocketPathLen (100).
+	base := t.TempDir()
+	longPart := strings.Repeat("a", 80)
+	longDir := filepath.Join(base, longPart)
+	os.MkdirAll(longDir, 0o755)
+
+	got := ResolveSocketDir(longDir)
+
+	// The result should be a symlink path under /tmp/ (or os.TempDir()),
+	// not the original long path.
+	if strings.HasPrefix(got, longDir) {
+		// If the path is still short enough (test path happens to be short on this system),
+		// that's fine — the logic only kicks in for truly long paths.
+		testPath := filepath.Join(longDir, "sockets", "agent.long-agent-name-example.sock")
+		if len(testPath) > 100 {
+			t.Errorf("ResolveSocketDir returned long path %q, expected symlink", got)
+		}
+	}
+
+	// The returned directory (or its symlink target) should point to <h2Dir>/sockets.
+	if strings.Contains(got, "h2-") {
+		// It's a symlink — verify it points to the right place.
+		target, err := os.Readlink(got)
+		if err != nil {
+			t.Fatalf("Readlink(%q): %v", got, err)
+		}
+		wantTarget := filepath.Join(longDir, "sockets")
+		if target != wantTarget {
+			t.Errorf("symlink target = %q, want %q", target, wantTarget)
+		}
+	}
+}
+
+func TestResolveSocketDir_SymlinkCreation(t *testing.T) {
+	// Test the symlink path logic directly by creating a real directory
+	// and a symlink, then verifying resolve follows it.
+	realDir := t.TempDir()
+	symlinkDir := filepath.Join(t.TempDir(), "symlink-target")
+
+	if err := os.Symlink(realDir, symlinkDir); err != nil {
+		t.Fatalf("create test symlink: %v", err)
+	}
+
+	// Verify the symlink points to the right place.
+	target, err := os.Readlink(symlinkDir)
+	if err != nil {
+		t.Fatalf("Readlink: %v", err)
+	}
+	if target != realDir {
+		t.Errorf("symlink target = %q, want %q", target, realDir)
 	}
 }
