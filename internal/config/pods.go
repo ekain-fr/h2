@@ -92,8 +92,17 @@ type PodTemplate struct {
 type PodTemplateAgent struct {
 	Name  string            `yaml:"name"`
 	Role  string            `yaml:"role"`
-	Count int               `yaml:"count"`
+	Count *int              `yaml:"count,omitempty"` // nil = default (1 agent), 0 = skip, N = N agents
 	Vars  map[string]string `yaml:"vars"`
+}
+
+// GetCount returns the effective count for this agent.
+// nil (not specified) defaults to 1. Explicit 0 means skip.
+func (a PodTemplateAgent) GetCount() int {
+	if a.Count == nil {
+		return 1
+	}
+	return *a.Count
 }
 
 // ExpandedAgent is a fully resolved agent after count expansion.
@@ -110,17 +119,30 @@ type ExpandedAgent struct {
 // and detects name collisions after expansion.
 //
 // Count semantics:
-//   - count <= 0 (or omitted): produce 1 agent with Index=0, Count=0
-//   - count == 1 with {{ .Index }} in name: render with Index=1, Count=1
+//   - count omitted (nil): produce 1 agent with Index=0, Count=0
+//   - count == 0: skip (produce 0 agents)
+//   - count == 1 with template expressions in name: render with Index=1, Count=1
 //   - count > 1: expand to N agents with Index=1..N, Count=N
+//   - count < 0: treated as default (1 agent)
 func ExpandPodAgents(pt *PodTemplate) ([]ExpandedAgent, error) {
 	var agents []ExpandedAgent
 
 	for _, a := range pt.Agents {
-		count := a.Count
+		count := a.GetCount()
 
-		if count <= 0 {
-			// Default: single agent, no index/count.
+		if count == 0 {
+			// Explicit count: 0 — skip this agent.
+			continue
+		}
+
+		if count < 0 {
+			count = 1
+		}
+
+		hasTemplate := strings.Contains(a.Name, "{{")
+
+		if count == 1 && (a.Count == nil || !hasTemplate) {
+			// Default (count omitted) or count:1 without template: single agent, no index.
 			agents = append(agents, ExpandedAgent{
 				Name:  a.Name,
 				Role:  a.Role,
@@ -131,37 +153,10 @@ func ExpandPodAgents(pt *PodTemplate) ([]ExpandedAgent, error) {
 			continue
 		}
 
-		if count == 1 {
-			name := a.Name
-			idx := 0
-			cnt := 0
-
-			// If count is explicitly 1 and name uses {{ .Index }}, render it.
-			if strings.Contains(a.Name, "{{ .Index }}") {
-				rendered, err := tmpl.Render(a.Name, &tmpl.Context{Index: 1, Count: 1})
-				if err != nil {
-					return nil, fmt.Errorf("render agent name %q: %w", a.Name, err)
-				}
-				name = rendered
-				idx = 1
-				cnt = 1
-			}
-
-			agents = append(agents, ExpandedAgent{
-				Name:  name,
-				Role:  a.Role,
-				Index: idx,
-				Count: cnt,
-				Vars:  a.Vars,
-			})
-			continue
-		}
-
-		// count > 1: expand to N agents.
-		hasIndexTemplate := strings.Contains(a.Name, "{{ .Index }}")
+		// count >= 1 with template, or count > 1: expand and render names.
 		for i := 1; i <= count; i++ {
 			var name string
-			if hasIndexTemplate {
+			if hasTemplate {
 				rendered, err := tmpl.Render(a.Name, &tmpl.Context{Index: i, Count: count})
 				if err != nil {
 					return nil, fmt.Errorf("render agent name %q (index %d): %w", a.Name, i, err)
@@ -238,23 +233,26 @@ func ParsePodTemplateRendered(yamlText string, name string, ctx *tmpl.Context) (
 		return nil, fmt.Errorf("pod template %q: %w", name, err)
 	}
 
-	// Merge defaults into context vars.
-	if ctx.Var == nil {
-		ctx.Var = make(map[string]string)
+	// Clone ctx.Var so we don't mutate the caller's map.
+	vars := make(map[string]string, len(ctx.Var))
+	for k, v := range ctx.Var {
+		vars[k] = v
 	}
 	for k, def := range varDefs {
-		if _, provided := ctx.Var[k]; !provided && def.Default != nil {
-			ctx.Var[k] = *def.Default
+		if _, provided := vars[k]; !provided && def.Default != nil {
+			vars[k] = *def.Default
 		}
 	}
 
 	// Validate required variables.
-	if err := tmpl.ValidateVars(varDefs, ctx.Var); err != nil {
+	if err := tmpl.ValidateVars(varDefs, vars); err != nil {
 		return nil, fmt.Errorf("pod template %q: %w", name, err)
 	}
 
-	// Render template.
-	rendered, err := tmpl.Render(remaining, ctx)
+	// Render template with cloned vars.
+	renderCtx := *ctx
+	renderCtx.Var = vars
+	rendered, err := tmpl.Render(remaining, &renderCtx)
 	if err != nil {
 		return nil, fmt.Errorf("pod template %q: %w", name, err)
 	}

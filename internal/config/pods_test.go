@@ -12,6 +12,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func intPtr(n int) *int { return &n }
+
 func TestValidatePodName(t *testing.T) {
 	valid := []string{
 		"backend",
@@ -184,7 +186,7 @@ func TestExpandPodAgents_SingleAgentNoCount(t *testing.T) {
 func TestExpandPodAgents_CountGreaterThanOne(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "coder", Role: "coding", Count: 3},
+			{Name: "coder", Role: "coding", Count: intPtr(3)},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -214,7 +216,7 @@ func TestExpandPodAgents_CountGreaterThanOne(t *testing.T) {
 func TestExpandPodAgents_CountWithIndexTemplate(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "coder-{{ .Index }}", Role: "coding", Count: 3},
+			{Name: "coder-{{ .Index }}", Role: "coding", Count: intPtr(3)},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -235,7 +237,7 @@ func TestExpandPodAgents_CountWithIndexTemplate(t *testing.T) {
 func TestExpandPodAgents_CountOneWithIndexTemplate(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "worker-{{ .Index }}", Role: "worker", Count: 1},
+			{Name: "worker-{{ .Index }}", Role: "worker", Count: intPtr(1)},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -257,7 +259,7 @@ func TestExpandPodAgents_CountOneWithIndexTemplate(t *testing.T) {
 func TestExpandPodAgents_CountOneNoTemplate(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "worker", Role: "worker", Count: 1},
+			{Name: "worker", Role: "worker", Count: intPtr(1)},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -280,7 +282,7 @@ func TestExpandPodAgents_VarsPassThrough(t *testing.T) {
 	vars := map[string]string{"team": "backend", "project": "h2"}
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "coder", Role: "coding", Count: 2, Vars: vars},
+			{Name: "coder", Role: "coding", Count: intPtr(2), Vars: vars},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -298,7 +300,7 @@ func TestExpandPodAgents_NameCollision(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
 			{Name: "coder-2", Role: "coding"},
-			{Name: "coder", Role: "coding", Count: 3},
+			{Name: "coder", Role: "coding", Count: intPtr(3)},
 		},
 	}
 	_, err := ExpandPodAgents(pt)
@@ -315,7 +317,7 @@ func TestExpandPodAgents_MixedAgents(t *testing.T) {
 		PodName: "dev-team",
 		Agents: []PodTemplateAgent{
 			{Name: "concierge", Role: "concierge"},
-			{Name: "coder-{{ .Index }}", Role: "coding", Count: 3},
+			{Name: "coder-{{ .Index }}", Role: "coding", Count: intPtr(3)},
 			{Name: "reviewer", Role: "reviewer"},
 		},
 	}
@@ -367,7 +369,7 @@ func TestExpandPodAgents_DuplicateStaticNames(t *testing.T) {
 func TestExpandPodAgents_NegativeCount(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "coder", Role: "coding", Count: -1},
+			{Name: "coder", Role: "coding", Count: intPtr(-1)},
 		},
 	}
 	agents, err := ExpandPodAgents(pt)
@@ -377,6 +379,21 @@ func TestExpandPodAgents_NegativeCount(t *testing.T) {
 	// Negative count treated as default (1 agent).
 	if len(agents) != 1 {
 		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+}
+
+func TestExpandPodAgents_CountZero(t *testing.T) {
+	pt := &PodTemplate{
+		Agents: []PodTemplateAgent{
+			{Name: "coder", Role: "coding", Count: intPtr(0)},
+		},
+	}
+	agents, err := ExpandPodAgents(pt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("count: 0 should produce 0 agents, got %d", len(agents))
 	}
 }
 
@@ -416,14 +433,14 @@ agents:
 
 	// First agent: no count, no vars.
 	a0 := pt.Agents[0]
-	if a0.Count != 0 {
-		t.Errorf("agent 0 Count = %d, want 0", a0.Count)
+	if a0.Count != nil {
+		t.Errorf("agent 0 Count = %v, want nil", a0.Count)
 	}
 
 	// Second agent: count=3, vars set.
 	a1 := pt.Agents[1]
-	if a1.Count != 3 {
-		t.Errorf("agent 1 Count = %d, want 3", a1.Count)
+	if a1.GetCount() != 3 {
+		t.Errorf("agent 1 Count = %d, want 3", a1.GetCount())
 	}
 	if a1.Vars["team"] != "backend" {
 		t.Errorf("agent 1 vars[team] = %q, want backend", a1.Vars["team"])
@@ -485,8 +502,8 @@ agents:
 	if len(pt.Agents) != 2 {
 		t.Fatalf("expected 2 agents, got %d", len(pt.Agents))
 	}
-	if pt.Agents[1].Count != 2 {
-		t.Errorf("coder count = %d, want 2", pt.Agents[1].Count)
+	if pt.Agents[1].GetCount() != 2 {
+		t.Errorf("coder count = %d, want 2", pt.Agents[1].GetCount())
 	}
 	if pt.Agents[1].Vars["team"] != "platform" {
 		t.Errorf("coder vars[team] = %q, want platform", pt.Agents[1].Vars["team"])
@@ -630,8 +647,8 @@ agents:
 	if len(pt.Agents) != 1 {
 		t.Fatalf("expected 1 agent template, got %d", len(pt.Agents))
 	}
-	if pt.Agents[0].Count != 2 {
-		t.Errorf("Count = %d, want 2", pt.Agents[0].Count)
+	if pt.Agents[0].GetCount() != 2 {
+		t.Errorf("Count = %d, want 2", pt.Agents[0].GetCount())
 	}
 }
 
@@ -654,8 +671,8 @@ func TestExpandPodAgents_NilAgents(t *testing.T) {
 func TestExpandPodAgents_TwoCountGroupsCollide(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "worker", Role: "coding", Count: 2},
-			{Name: "worker", Role: "reviewer", Count: 2},
+			{Name: "worker", Role: "coding", Count: intPtr(2)},
+			{Name: "worker", Role: "reviewer", Count: intPtr(2)},
 		},
 	}
 	_, err := ExpandPodAgents(pt)
@@ -672,7 +689,7 @@ func TestExpandPodAgents_TwoCountGroupsCollide(t *testing.T) {
 func TestExpandPodAgents_NoCollisionSimilarNames(t *testing.T) {
 	pt := &PodTemplate{
 		Agents: []PodTemplateAgent{
-			{Name: "coder", Role: "coding", Count: 1},
+			{Name: "coder", Role: "coding", Count: intPtr(1)},
 			{Name: "coder-helper", Role: "coding"},
 		},
 	}
@@ -898,7 +915,7 @@ instructions: |
 	pt := &PodTemplate{
 		PodName: "myteam",
 		Agents: []PodTemplateAgent{
-			{Name: "coder-{{ .Index }}", Role: "indexed", Count: 3},
+			{Name: "coder-{{ .Index }}", Role: "indexed", Count: intPtr(3)},
 		},
 	}
 	expanded, err := ExpandPodAgents(pt)

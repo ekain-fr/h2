@@ -494,6 +494,17 @@ func TestRender_Errors(t *testing.T) {
 		}
 	})
 
+	t.Run("undefined variable renders as no value", func(t *testing.T) {
+		got, err := Render(`{{ .Var.nonexistent }}`, &Context{Var: map[string]string{}})
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		// Go text/template renders missing map keys as "<no value>".
+		if got != "<no value>" {
+			t.Errorf("Render() = %q, want %q", got, "<no value>")
+		}
+	})
+
 	t.Run("empty template", func(t *testing.T) {
 		got, err := Render("", &Context{})
 		if err != nil {
