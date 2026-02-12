@@ -15,6 +15,7 @@ import (
 	"h2/internal/session/agent"
 	"h2/internal/session/message"
 	"h2/internal/socketdir"
+	s "h2/internal/termstyle"
 )
 
 func newLsCmd() *cobra.Command {
@@ -71,9 +72,9 @@ func newLsCmd() *cobra.Command {
 
 			// Bridges are always shown.
 			if len(bridges) > 0 {
-				fmt.Printf("\n\033[1mBridges\033[0m\n")
+				fmt.Printf("\n%s\n", s.Bold("Bridges"))
 				for _, e := range bridges {
-					fmt.Printf("  \033[32m●\033[0m %s\n", e.Name)
+					fmt.Printf("  %s %s\n", s.GreenDot(), e.Name)
 				}
 			}
 
@@ -176,12 +177,12 @@ func printPodGroups(groups []podGroup, unresponsive []string) {
 		// Print group header.
 		if hasPods || len(groups) > 1 {
 			if g.Pod != "" {
-				fmt.Printf("\033[1mAgents (pod: %s)\033[0m\n", g.Pod)
+				fmt.Printf("%s\n", s.Bold(fmt.Sprintf("Agents (pod: %s)", g.Pod)))
 			} else {
-				fmt.Printf("\033[1mAgents (no pod)\033[0m\n")
+				fmt.Printf("%s\n", s.Bold("Agents (no pod)"))
 			}
 		} else {
-			fmt.Printf("\033[1mAgents\033[0m\n")
+			fmt.Printf("%s\n", s.Bold("Agents"))
 		}
 
 		for _, info := range g.Agents {
@@ -190,41 +191,41 @@ func printPodGroups(groups []podGroup, unresponsive []string) {
 	}
 
 	for _, name := range unresponsive {
-		fmt.Printf("  \033[31m✗\033[0m %s \033[2m(not responding)\033[0m\n", name)
+		fmt.Printf("  %s %s %s\n", s.RedX(), name, s.Dim("(not responding)"))
 	}
 }
 
 func printAgentLine(info *message.AgentInfo) {
-	// Pick symbol and color based on state.
-	var symbol, stateColor string
+	// Pick symbol and color function based on state.
+	var symbol string
+	var colorFn func(string) string
 	switch info.State {
 	case "active":
-		symbol = "\033[32m●\033[0m" // green dot
-		stateColor = "\033[32m"     // green
+		symbol = s.GreenDot()
+		colorFn = s.Green
 	case "idle":
-		symbol = "\033[33m○\033[0m" // yellow circle
-		stateColor = "\033[33m"     // yellow
+		symbol = s.YellowDot()
+		colorFn = s.Yellow
 	case "exited":
-		symbol = "\033[31m●\033[0m" // red dot
-		stateColor = "\033[31m"     // red
+		symbol = s.RedDot()
+		colorFn = s.Red
 	default:
-		symbol = "\033[37m○\033[0m"
-		stateColor = "\033[37m"
+		symbol = s.GrayDot()
+		colorFn = s.Gray
 	}
 
 	// State label with duration.
 	var stateLabel string
 	if info.State != "" {
-		label := info.StateDisplayText
-		stateLabel = fmt.Sprintf("%s%s %s\033[0m", stateColor, label, info.StateDuration)
+		stateLabel = colorFn(fmt.Sprintf("%s %s", info.StateDisplayText, info.StateDuration))
 	} else {
-		stateLabel = fmt.Sprintf("\033[2mup %s\033[0m", info.Uptime)
+		stateLabel = s.Dim(fmt.Sprintf("up %s", info.Uptime))
 	}
 
 	// Queued suffix — only show if there are queued messages.
 	queued := ""
 	if info.QueuedCount > 0 {
-		queued = fmt.Sprintf(", \033[36m%d queued\033[0m", info.QueuedCount)
+		queued = fmt.Sprintf(", %s", s.Cyan(fmt.Sprintf("%d queued", info.QueuedCount)))
 	}
 
 	// OTEL metrics — tokens and cost (only if data received).
@@ -247,15 +248,15 @@ func printAgentLine(info *message.AgentInfo) {
 		if info.BlockedToolName != "" {
 			blocked = fmt.Sprintf("permission: %s", info.BlockedToolName)
 		}
-		tool = fmt.Sprintf(" \033[31m(blocked %s)\033[0m", blocked) // red
+		tool = " " + s.Red(fmt.Sprintf("(blocked %s)", blocked))
 	} else if info.LastToolUse != "" {
-		tool = fmt.Sprintf(" \033[2m(%s)\033[0m", info.LastToolUse)
+		tool = " " + s.Dim(fmt.Sprintf("(%s)", info.LastToolUse))
 	}
 
 	// Role label.
 	role := ""
 	if info.RoleName != "" {
-		role = fmt.Sprintf(" \033[35m(%s)\033[0m", info.RoleName) // magenta
+		role = " " + s.Magenta(fmt.Sprintf("(%s)", info.RoleName))
 	}
 
 	// Session ID suffix — show truncated ID if present.
@@ -265,15 +266,15 @@ func printAgentLine(info *message.AgentInfo) {
 		if len(short) > 8 {
 			short = short[:8]
 		}
-		sid = fmt.Sprintf(" \033[2m[%s]\033[0m", short)
+		sid = " " + s.Dim(fmt.Sprintf("[%s]", short))
 	}
 
 	if info.State != "" {
-		fmt.Printf("  %s %s%s \033[2m%s\033[0m — %s, up %s%s%s%s%s\n",
-			symbol, info.Name, role, info.Command, stateLabel, info.Uptime, metrics, queued, sid, tool)
+		fmt.Printf("  %s %s%s %s — %s, up %s%s%s%s%s\n",
+			symbol, info.Name, role, s.Dim(info.Command), stateLabel, info.Uptime, metrics, queued, sid, tool)
 	} else {
-		fmt.Printf("  %s %s%s \033[2m%s\033[0m — %s%s%s%s%s\n",
-			symbol, info.Name, role, info.Command, stateLabel, metrics, queued, sid, tool)
+		fmt.Printf("  %s %s%s %s — %s%s%s%s%s\n",
+			symbol, info.Name, role, s.Dim(info.Command), stateLabel, metrics, queued, sid, tool)
 	}
 }
 
@@ -301,12 +302,12 @@ func listAll() error {
 			fmt.Println()
 		}
 
-		fmt.Printf("\033[1m%s\033[0m\n", shortenHome(h2Dir))
+		fmt.Printf("%s\n", s.Bold(shortenHome(h2Dir)))
 
 		sockDir := socketdir.ResolveSocketDir(h2Dir)
 		entries, err := socketdir.ListIn(sockDir)
 		if err != nil {
-			fmt.Printf("  \033[2m(error reading sockets: %v)\033[0m\n", err)
+			fmt.Printf("  %s\n", s.Dim(fmt.Sprintf("(error reading sockets: %v)", err)))
 			continue
 		}
 
@@ -338,9 +339,9 @@ func listAll() error {
 		}
 
 		if len(bridges) > 0 {
-			fmt.Printf("  \033[1mBridges\033[0m\n")
+			fmt.Printf("  %s\n", s.Bold("Bridges"))
 			for _, e := range bridges {
-				fmt.Printf("    \033[32m●\033[0m %s\n", e.Name)
+				fmt.Printf("    %s %s\n", s.GreenDot(), e.Name)
 			}
 		}
 	}
@@ -369,12 +370,12 @@ func printPodGroupsIndented(groups []podGroup, unresponsive []string) {
 
 		if hasPods || len(groups) > 1 {
 			if g.Pod != "" {
-				fmt.Printf("  \033[1mAgents (pod: %s)\033[0m\n", g.Pod)
+				fmt.Printf("  %s\n", s.Bold(fmt.Sprintf("Agents (pod: %s)", g.Pod)))
 			} else {
-				fmt.Printf("  \033[1mAgents (no pod)\033[0m\n")
+				fmt.Printf("  %s\n", s.Bold("Agents (no pod)"))
 			}
 		} else {
-			fmt.Printf("  \033[1mAgents\033[0m\n")
+			fmt.Printf("  %s\n", s.Bold("Agents"))
 		}
 
 		for _, info := range g.Agents {
@@ -384,7 +385,7 @@ func printPodGroupsIndented(groups []podGroup, unresponsive []string) {
 	}
 
 	for _, name := range unresponsive {
-		fmt.Printf("    \033[31m✗\033[0m %s \033[2m(not responding)\033[0m\n", name)
+		fmt.Printf("    %s %s %s\n", s.RedX(), name, s.Dim("(not responding)"))
 	}
 }
 
