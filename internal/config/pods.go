@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"h2/internal/tmpl"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,14 +71,123 @@ func ListPodRoles() ([]*Role, error) {
 
 // PodTemplate defines a set of agents to launch together as a pod.
 type PodTemplate struct {
-	PodName string             `yaml:"pod_name"`
-	Agents  []PodTemplateAgent `yaml:"agents"`
+	PodName   string                  `yaml:"pod_name"`
+	Variables map[string]tmpl.VarDef  `yaml:"variables"`
+	Agents    []PodTemplateAgent      `yaml:"agents"`
 }
 
 // PodTemplateAgent defines a single agent within a pod template.
 type PodTemplateAgent struct {
-	Name string `yaml:"name"`
-	Role string `yaml:"role"`
+	Name  string            `yaml:"name"`
+	Role  string            `yaml:"role"`
+	Count int               `yaml:"count"`
+	Vars  map[string]string `yaml:"vars"`
+}
+
+// ExpandedAgent is a fully resolved agent after count expansion.
+type ExpandedAgent struct {
+	Name  string
+	Role  string
+	Index int
+	Count int
+	Vars  map[string]string
+}
+
+// ExpandPodAgents expands count groups in a pod template into a flat list of agents.
+// It handles count-based multiplication, auto-suffix for names without {{ .Index }},
+// and detects name collisions after expansion.
+//
+// Count semantics:
+//   - count <= 0 (or omitted): produce 1 agent with Index=0, Count=0
+//   - count == 1 with {{ .Index }} in name: render with Index=1, Count=1
+//   - count > 1: expand to N agents with Index=1..N, Count=N
+func ExpandPodAgents(pt *PodTemplate) ([]ExpandedAgent, error) {
+	var agents []ExpandedAgent
+
+	for _, a := range pt.Agents {
+		count := a.Count
+
+		if count <= 0 {
+			// Default: single agent, no index/count.
+			agents = append(agents, ExpandedAgent{
+				Name:  a.Name,
+				Role:  a.Role,
+				Index: 0,
+				Count: 0,
+				Vars:  a.Vars,
+			})
+			continue
+		}
+
+		if count == 1 {
+			name := a.Name
+			idx := 0
+			cnt := 0
+
+			// If count is explicitly 1 and name uses {{ .Index }}, render it.
+			if strings.Contains(a.Name, "{{ .Index }}") {
+				rendered, err := tmpl.Render(a.Name, &tmpl.Context{Index: 1, Count: 1})
+				if err != nil {
+					return nil, fmt.Errorf("render agent name %q: %w", a.Name, err)
+				}
+				name = rendered
+				idx = 1
+				cnt = 1
+			}
+
+			agents = append(agents, ExpandedAgent{
+				Name:  name,
+				Role:  a.Role,
+				Index: idx,
+				Count: cnt,
+				Vars:  a.Vars,
+			})
+			continue
+		}
+
+		// count > 1: expand to N agents.
+		hasIndexTemplate := strings.Contains(a.Name, "{{ .Index }}")
+		for i := 1; i <= count; i++ {
+			var name string
+			if hasIndexTemplate {
+				rendered, err := tmpl.Render(a.Name, &tmpl.Context{Index: i, Count: count})
+				if err != nil {
+					return nil, fmt.Errorf("render agent name %q (index %d): %w", a.Name, i, err)
+				}
+				name = rendered
+			} else {
+				// Auto-append index suffix.
+				name = fmt.Sprintf("%s-%d", a.Name, i)
+			}
+
+			agents = append(agents, ExpandedAgent{
+				Name:  name,
+				Role:  a.Role,
+				Index: i,
+				Count: count,
+				Vars:  a.Vars,
+			})
+		}
+	}
+
+	// Check for name collisions.
+	if err := checkNameCollisions(agents); err != nil {
+		return nil, err
+	}
+
+	return agents, nil
+}
+
+// checkNameCollisions detects duplicate agent names after expansion.
+func checkNameCollisions(agents []ExpandedAgent) error {
+	seen := make(map[string]int) // name → first index in agents slice
+	for i, a := range agents {
+		if prev, ok := seen[a.Name]; ok {
+			return fmt.Errorf("duplicate agent name %q: agent at position %d collides with agent at position %d", a.Name, i+1, prev+1)
+		}
+		seen[a.Name] = i
+	}
+	return nil
 }
 
 // LoadPodTemplate loads a template from <h2-dir>/pods/templates/<name>.yaml.
@@ -87,11 +198,63 @@ func LoadPodTemplate(name string) (*PodTemplate, error) {
 		return nil, fmt.Errorf("read pod template: %w", err)
 	}
 
-	var tmpl PodTemplate
-	if err := yaml.Unmarshal(data, &tmpl); err != nil {
+	var pt PodTemplate
+	if err := yaml.Unmarshal(data, &pt); err != nil {
 		return nil, fmt.Errorf("parse pod template: %w", err)
 	}
-	return &tmpl, nil
+	return &pt, nil
+}
+
+// LoadPodTemplateRendered loads a pod template with template rendering.
+// It extracts variables, validates them, renders the template, then parses.
+func LoadPodTemplateRendered(name string, ctx *tmpl.Context) (*PodTemplate, error) {
+	path := filepath.Join(PodTemplatesDir(), name+".yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read pod template: %w", err)
+	}
+
+	return ParsePodTemplateRendered(string(data), name, ctx)
+}
+
+// ParsePodTemplateRendered parses pod template YAML text with template rendering.
+// Exported for testing without filesystem.
+func ParsePodTemplateRendered(yamlText string, name string, ctx *tmpl.Context) (*PodTemplate, error) {
+	// Phase 1: Extract variables before rendering.
+	varDefs, remaining, err := tmpl.ParseVarDefs(yamlText)
+	if err != nil {
+		return nil, fmt.Errorf("pod template %q: %w", name, err)
+	}
+
+	// Merge defaults into context vars.
+	if ctx.Var == nil {
+		ctx.Var = make(map[string]string)
+	}
+	for k, def := range varDefs {
+		if _, provided := ctx.Var[k]; !provided && def.Default != nil {
+			ctx.Var[k] = *def.Default
+		}
+	}
+
+	// Validate required variables.
+	if err := tmpl.ValidateVars(varDefs, ctx.Var); err != nil {
+		return nil, fmt.Errorf("pod template %q: %w", name, err)
+	}
+
+	// Render template.
+	rendered, err := tmpl.Render(remaining, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pod template %q: %w", name, err)
+	}
+
+	// Parse rendered YAML.
+	var pt PodTemplate
+	if err := yaml.Unmarshal([]byte(rendered), &pt); err != nil {
+		return nil, fmt.Errorf("pod template %q produced invalid YAML after rendering: %w", name, err)
+	}
+	pt.Variables = varDefs
+
+	return &pt, nil
 }
 
 // ListPodTemplates returns available pod templates.
