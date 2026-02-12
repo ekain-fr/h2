@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,8 +129,11 @@ func (s *Service) handleConn(conn net.Conn) {
 
 	switch req.Type {
 	case "send":
-		s.handleOutbound(req.From, req.Body)
-		message.SendResponse(conn, &message.Response{OK: true})
+		if err := s.handleOutbound(req.From, req.Body); err != nil {
+			message.SendResponse(conn, &message.Response{Error: err.Error()})
+		} else {
+			message.SendResponse(conn, &message.Response{OK: true})
+		}
 	case "status":
 		message.SendResponse(conn, &message.Response{
 			OK:     true,
@@ -183,7 +187,8 @@ func (s *Service) replyError(msg string) {
 // handleOutbound sends a message from an agent to all Sender bridges.
 // Messages from non-concierge agents are tagged with [agent-name] so that
 // replies can be routed back to the correct agent.
-func (s *Service) handleOutbound(from, body string) {
+// Returns an error if any bridge fails to deliver the message.
+func (s *Service) handleOutbound(from, body string) error {
 	s.mu.Lock()
 	s.lastSender = from
 	s.messagesSent++
@@ -197,13 +202,19 @@ func (s *Service) handleOutbound(from, body string) {
 	}
 
 	ctx := context.Background()
+	var errs []string
 	for _, b := range s.bridges {
 		if sender, ok := b.(bridge.Sender); ok {
 			if err := sender.Send(ctx, tagged); err != nil {
 				log.Printf("bridge: send via %s: %v", b.Name(), err)
+				errs = append(errs, fmt.Sprintf("%s: %v", b.Name(), err))
 			}
 		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("send failed: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // sendToAgent connects to an agent's socket and sends a message.

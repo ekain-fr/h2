@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 const (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 60 * time.Second
+
+	// maxMessageLen is Telegram's maximum message length.
+	maxMessageLen = 4096
 )
 
 // Telegram implements bridge.Bridge, bridge.Sender, and bridge.Receiver
@@ -52,8 +56,20 @@ func (t *Telegram) apiURL(method string) string {
 	return fmt.Sprintf("%s/bot%s/%s", base, t.Token, method)
 }
 
-// Send posts a text message to the configured chat.
+// Send posts a text message to the configured chat. Messages longer than
+// Telegram's 4096-character limit are split into multiple messages at line
+// boundaries when possible.
 func (t *Telegram) Send(ctx context.Context, text string) error {
+	chunks := splitMessage(text, maxMessageLen)
+	for _, chunk := range chunks {
+		if err := t.sendChunk(ctx, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Telegram) sendChunk(ctx context.Context, text string) error {
 	resp, err := t.client.PostForm(t.apiURL("sendMessage"), url.Values{
 		"chat_id": {strconv.FormatInt(t.ChatID, 10)},
 		"text":    {text},
@@ -71,6 +87,35 @@ func (t *Telegram) Send(ctx context.Context, text string) error {
 		return fmt.Errorf("telegram send: API error: %s", result.Description)
 	}
 	return nil
+}
+
+// splitMessage splits text into chunks of at most maxLen characters.
+// It prefers splitting at line boundaries to avoid breaking mid-line.
+func splitMessage(text string, maxLen int) []string {
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(text) > 0 {
+		if len(text) <= maxLen {
+			chunks = append(chunks, text)
+			break
+		}
+
+		// Find the last newline within the limit.
+		cut := strings.LastIndex(text[:maxLen], "\n")
+		if cut <= 0 {
+			// No newline found — hard cut at limit.
+			cut = maxLen
+		} else {
+			cut++ // include the newline in this chunk
+		}
+
+		chunks = append(chunks, text[:cut])
+		text = text[cut:]
+	}
+	return chunks
 }
 
 // Start begins long-polling for incoming messages. It spawns a goroutine

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,6 +41,107 @@ func TestSend(t *testing.T) {
 	}
 	if gotText != "hello from h2" {
 		t.Errorf("text = %q, want %q", gotText, "hello from h2")
+	}
+}
+
+func TestSplitMessage_Short(t *testing.T) {
+	chunks := splitMessage("hello", 4096)
+	if len(chunks) != 1 || chunks[0] != "hello" {
+		t.Errorf("expected single chunk, got %v", chunks)
+	}
+}
+
+func TestSplitMessage_ExactLimit(t *testing.T) {
+	msg := strings.Repeat("a", 4096)
+	chunks := splitMessage(msg, 4096)
+	if len(chunks) != 1 || chunks[0] != msg {
+		t.Errorf("expected single chunk for exact limit, got %d chunks", len(chunks))
+	}
+}
+
+func TestSplitMessage_SplitsAtNewline(t *testing.T) {
+	// 3 lines of 40 chars each, split at max 90 chars — should split after line 2.
+	line := strings.Repeat("x", 39) + "\n"
+	msg := line + line + line
+	chunks := splitMessage(msg, 90)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d: %v", len(chunks), chunks)
+	}
+	if chunks[0] != line+line {
+		t.Errorf("chunk[0] = %q, want two lines", chunks[0])
+	}
+	if chunks[1] != line {
+		t.Errorf("chunk[1] = %q, want one line", chunks[1])
+	}
+}
+
+func TestSplitMessage_HardCutNoNewline(t *testing.T) {
+	msg := strings.Repeat("a", 100)
+	chunks := splitMessage(msg, 30)
+	if len(chunks) != 4 {
+		t.Fatalf("expected 4 chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if i < 3 && len(c) != 30 {
+			t.Errorf("chunk[%d] len = %d, want 30", i, len(c))
+		}
+	}
+	if chunks[3] != strings.Repeat("a", 10) {
+		t.Errorf("last chunk = %q", chunks[3])
+	}
+}
+
+func TestSend_ChunksLongMessage(t *testing.T) {
+	var mu sync.Mutex
+	var sentTexts []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/botTOKEN/sendMessage" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		r.ParseForm()
+		mu.Lock()
+		sentTexts = append(sentTexts, r.FormValue("text"))
+		mu.Unlock()
+		json.NewEncoder(w).Encode(apiResponse{OK: true})
+	}))
+	defer srv.Close()
+
+	tg := &Telegram{
+		Token:   "TOKEN",
+		ChatID:  42,
+		BaseURL: srv.URL,
+	}
+
+	// Build a message over 4096 chars with newlines.
+	var b strings.Builder
+	for i := 0; i < 100; i++ {
+		b.WriteString(strings.Repeat("x", 79))
+		b.WriteString("\n")
+	}
+	msg := b.String() // 8000 chars
+
+	err := tg.Send(context.Background(), msg)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(sentTexts) < 2 {
+		t.Fatalf("expected >= 2 chunks, got %d", len(sentTexts))
+	}
+	// Verify all chunks are within limit.
+	for i, chunk := range sentTexts {
+		if len(chunk) > maxMessageLen {
+			t.Errorf("chunk[%d] len = %d, exceeds %d", i, len(chunk), maxMessageLen)
+		}
+	}
+	// Verify the full message is reconstructed.
+	reassembled := strings.Join(sentTexts, "")
+	if reassembled != msg {
+		t.Errorf("reassembled message doesn't match original (len %d vs %d)", len(reassembled), len(msg))
 	}
 }
 
