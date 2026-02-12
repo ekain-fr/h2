@@ -33,6 +33,43 @@ instructions: |
   You work on {{ .Var.project_name }} for team {{ .Var.team }}.
 ```
 
+**Required vs optional — how it works:**
+
+A variable is **required** if the `default:` key is absent from its YAML definition. A variable is **optional** if `default:` is present — even if the default value is an empty string.
+
+```yaml
+variables:
+  team:
+    description: "Team name"
+    # no `default:` key at all → REQUIRED
+    # Launching without --var team=X will fail
+
+  project_name:
+    description: "Project"
+    default: "myapp"
+    # has `default:` → OPTIONAL, defaults to "myapp"
+
+  prefix:
+    description: "Prefix"
+    default: ""
+    # has `default:` (empty string) → OPTIONAL, defaults to ""
+```
+
+In Go, we detect the presence vs absence of the YAML key using a `*string` pointer:
+
+```go
+type VarDef struct {
+    Description string  `yaml:"description"`
+    Default     *string `yaml:"default"`  // nil = no default (required), non-nil = has default (optional)
+}
+
+func (v VarDef) Required() bool {
+    return v.Default == nil
+}
+```
+
+When YAML has no `default:` key, Go's YAML parser leaves `Default` as `nil` → required. When YAML has `default: ""`, Go parses it as a pointer to `""` → optional. This cleanly distinguishes "not set" from "set to empty."
+
 **Validation rules:**
 - If a variable has no `default`, it is **required** — launching an agent with a role that has unsatisfied required variables fails with a clear error listing all missing variables
 - Variables can be provided via CLI: `h2 run --name coder --role coding --var team=backend`
@@ -209,10 +246,10 @@ Phase 2 — Agent expansion and role rendering:
 package tmpl
 
 // VarDef defines a template variable with optional default.
+// Default is a pointer: nil means "required" (no default), non-nil means "optional".
 type VarDef struct {
-    Description string `yaml:"description"`
-    Default     string `yaml:"default"`
-    HasDefault  bool   // set during parsing (distinguishes "" default from no default)
+    Description string  `yaml:"description"`
+    Default     *string `yaml:"default"`
 }
 
 // Context holds all template data available during rendering.
