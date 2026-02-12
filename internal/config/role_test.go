@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"h2/internal/tmpl"
 )
 
 func TestLoadRoleFrom_FullRole(t *testing.T) {
@@ -645,6 +647,307 @@ func TestValidate_WorktreeMissingName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "name") {
 		t.Errorf("error = %q, want it to contain 'name'", err.Error())
+	}
+}
+
+// --- LoadRoleRendered tests ---
+
+func TestLoadRoleRenderedFrom_BasicRendering(t *testing.T) {
+	yamlContent := `
+name: coder
+variables:
+  team:
+    description: "Team name"
+  env:
+    description: "Environment"
+    default: "dev"
+instructions: |
+  You are {{ .AgentName }} on team {{ .Var.team }} in {{ .Var.env }}.
+`
+	path := writeTempFile(t, "coder.yaml", yamlContent)
+	ctx := &tmpl.Context{
+		AgentName: "coder-1",
+		Var:       map[string]string{"team": "backend"},
+	}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if !strings.Contains(role.Instructions, "coder-1") {
+		t.Errorf("Instructions should contain AgentName, got: %s", role.Instructions)
+	}
+	if !strings.Contains(role.Instructions, "backend") {
+		t.Errorf("Instructions should contain team var, got: %s", role.Instructions)
+	}
+	if !strings.Contains(role.Instructions, "dev") {
+		t.Errorf("Instructions should contain default env, got: %s", role.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_WorktreeRendering(t *testing.T) {
+	yamlContent := `
+name: coder
+instructions: |
+  Work on ticket.
+worktree:
+  project_dir: /tmp/repo
+  name: "{{ .AgentName }}-wt"
+  branch_name: "feature/{{ .Var.ticket }}"
+`
+	path := writeTempFile(t, "worktree.yaml", yamlContent)
+	ctx := &tmpl.Context{
+		AgentName: "coder-1",
+		Var:       map[string]string{"ticket": "123"},
+	}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if role.Worktree == nil {
+		t.Fatal("Worktree should not be nil")
+	}
+	if role.Worktree.Name != "coder-1-wt" {
+		t.Errorf("Worktree.Name = %q, want %q", role.Worktree.Name, "coder-1-wt")
+	}
+	if role.Worktree.BranchName != "feature/123" {
+		t.Errorf("Worktree.BranchName = %q, want %q", role.Worktree.BranchName, "feature/123")
+	}
+}
+
+func TestLoadRoleRenderedFrom_WorkingDirRendering(t *testing.T) {
+	yamlContent := `
+name: coder
+instructions: |
+  Work on project.
+working_dir: "/projects/{{ .Var.project }}"
+`
+	path := writeTempFile(t, "workdir.yaml", yamlContent)
+	ctx := &tmpl.Context{Var: map[string]string{"project": "h2"}}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if role.WorkingDir != "/projects/h2" {
+		t.Errorf("WorkingDir = %q, want %q", role.WorkingDir, "/projects/h2")
+	}
+}
+
+func TestLoadRoleRenderedFrom_ModelRendering(t *testing.T) {
+	yamlContent := `
+name: coder
+instructions: |
+  Code.
+model: "{{ .Var.model }}"
+`
+	path := writeTempFile(t, "model.yaml", yamlContent)
+	ctx := &tmpl.Context{Var: map[string]string{"model": "haiku"}}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if role.Model != "haiku" {
+		t.Errorf("Model = %q, want %q", role.Model, "haiku")
+	}
+}
+
+func TestLoadRoleRenderedFrom_HeartbeatRendering(t *testing.T) {
+	yamlContent := `
+name: scheduler
+instructions: |
+  Schedule.
+heartbeat:
+  idle_timeout: 30s
+  message: "Hey {{ .AgentName }}"
+`
+	path := writeTempFile(t, "heartbeat.yaml", yamlContent)
+	ctx := &tmpl.Context{AgentName: "scheduler-1"}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if role.Heartbeat == nil {
+		t.Fatal("Heartbeat should not be nil")
+	}
+	if role.Heartbeat.Message != "Hey scheduler-1" {
+		t.Errorf("Heartbeat.Message = %q, want %q", role.Heartbeat.Message, "Hey scheduler-1")
+	}
+}
+
+func TestLoadRoleRenderedFrom_RequiredVarMissing(t *testing.T) {
+	yamlContent := `
+name: coder
+variables:
+  team:
+    description: "Team name"
+instructions: |
+  Team: {{ .Var.team }}.
+`
+	path := writeTempFile(t, "reqvar.yaml", yamlContent)
+	ctx := &tmpl.Context{Var: map[string]string{}}
+
+	_, err := LoadRoleRenderedFrom(path, ctx)
+	if err == nil {
+		t.Fatal("expected error for missing required variable")
+	}
+	if !strings.Contains(err.Error(), "team") {
+		t.Errorf("error should mention 'team', got: %v", err)
+	}
+}
+
+func TestLoadRoleRenderedFrom_RequiredVarProvided(t *testing.T) {
+	yamlContent := `
+name: coder
+variables:
+  team:
+    description: "Team name"
+instructions: |
+  Team: {{ .Var.team }}.
+`
+	path := writeTempFile(t, "reqvar2.yaml", yamlContent)
+	ctx := &tmpl.Context{Var: map[string]string{"team": "backend"}}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	if !strings.Contains(role.Instructions, "backend") {
+		t.Errorf("Instructions should contain 'backend', got: %s", role.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_NilContext(t *testing.T) {
+	yamlContent := `
+name: coder
+instructions: |
+  Hello {{ .AgentName }}.
+`
+	path := writeTempFile(t, "nilctx.yaml", yamlContent)
+
+	role, err := LoadRoleRenderedFrom(path, nil)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	// With nil context, template expressions are left as-is (no rendering).
+	if !strings.Contains(role.Instructions, "{{ .AgentName }}") {
+		t.Errorf("With nil ctx, instructions should contain raw template, got: %s", role.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_BackwardCompat(t *testing.T) {
+	// Role with no template expressions and no variables section.
+	yamlContent := `
+name: simple
+instructions: |
+  A simple static role.
+`
+	path := writeTempFile(t, "static.yaml", yamlContent)
+	ctx := &tmpl.Context{AgentName: "agent-1"}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	if role.Name != "simple" {
+		t.Errorf("Name = %q, want %q", role.Name, "simple")
+	}
+	if !strings.Contains(role.Instructions, "simple static role") {
+		t.Errorf("Instructions should be unchanged, got: %s", role.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_Conditionals(t *testing.T) {
+	yamlContent := `
+name: coder
+instructions: |
+  You are {{ .AgentName }}.
+  {{ if .PodName }}You are in pod {{ .PodName }}.{{ else }}Standalone.{{ end }}
+`
+	path := writeTempFile(t, "cond.yaml", yamlContent)
+
+	// With pod context.
+	ctx := &tmpl.Context{AgentName: "coder-1", PodName: "backend"}
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	if !strings.Contains(role.Instructions, "pod backend") {
+		t.Errorf("should contain pod name, got: %s", role.Instructions)
+	}
+
+	// Without pod context (standalone).
+	ctx2 := &tmpl.Context{AgentName: "coder-1"}
+	role2, err := LoadRoleRenderedFrom(path, ctx2)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	if !strings.Contains(role2.Instructions, "Standalone") {
+		t.Errorf("should contain 'Standalone', got: %s", role2.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_StandaloneZeroValues(t *testing.T) {
+	yamlContent := `
+name: pod-aware
+instructions: |
+  Index: {{ .Index }}, Count: {{ .Count }}.
+  {{ if .PodName }}In pod.{{ else }}Not in pod.{{ end }}
+`
+	path := writeTempFile(t, "podaware.yaml", yamlContent)
+	ctx := &tmpl.Context{} // standalone: all zero values
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+	if !strings.Contains(role.Instructions, "Index: 0") {
+		t.Errorf("Index should be 0, got: %s", role.Instructions)
+	}
+	if !strings.Contains(role.Instructions, "Count: 0") {
+		t.Errorf("Count should be 0, got: %s", role.Instructions)
+	}
+	if !strings.Contains(role.Instructions, "Not in pod") {
+		t.Errorf("PodName should be empty (not in pod), got: %s", role.Instructions)
+	}
+}
+
+func TestLoadRoleRenderedFrom_VariablesFieldPopulated(t *testing.T) {
+	yamlContent := `
+name: coder
+variables:
+  team:
+    description: "Team name"
+  env:
+    description: "Env"
+    default: "dev"
+instructions: |
+  Team {{ .Var.team }} env {{ .Var.env }}.
+`
+	path := writeTempFile(t, "vars.yaml", yamlContent)
+	ctx := &tmpl.Context{Var: map[string]string{"team": "backend"}}
+
+	role, err := LoadRoleRenderedFrom(path, ctx)
+	if err != nil {
+		t.Fatalf("LoadRoleRenderedFrom: %v", err)
+	}
+
+	if len(role.Variables) != 2 {
+		t.Fatalf("Variables count = %d, want 2", len(role.Variables))
+	}
+	if !role.Variables["team"].Required() {
+		t.Error("team should be required")
+	}
+	if role.Variables["env"].Required() {
+		t.Error("env should be optional")
 	}
 }
 

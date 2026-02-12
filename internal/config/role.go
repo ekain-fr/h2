@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"h2/internal/tmpl"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,18 +88,19 @@ func WorktreesDir() string {
 
 // Role defines a named configuration bundle for an h2 agent.
 type Role struct {
-	Name            string           `yaml:"name"`
-	Description     string           `yaml:"description,omitempty"`
-	AgentType       string           `yaml:"agent_type,omitempty"` // "claude" (default), future: other agent types
-	Model           string           `yaml:"model,omitempty"`
-	ClaudeConfigDir string           `yaml:"claude_config_dir,omitempty"`
-	WorkingDir      string           `yaml:"working_dir,omitempty"` // agent CWD (default ".")
-	Worktree        *WorktreeConfig  `yaml:"worktree,omitempty"`  // git worktree settings
-	Instructions    string           `yaml:"instructions"`
-	Permissions     Permissions      `yaml:"permissions,omitempty"`
-	Heartbeat       *HeartbeatConfig `yaml:"heartbeat,omitempty"`
-	Hooks           yaml.Node        `yaml:"hooks,omitempty"`   // passed through as-is to settings.json
-	Settings        yaml.Node        `yaml:"settings,omitempty"` // extra settings.json keys
+	Name            string                  `yaml:"name"`
+	Description     string                  `yaml:"description,omitempty"`
+	AgentType       string                  `yaml:"agent_type,omitempty"` // "claude" (default), future: other agent types
+	Model           string                  `yaml:"model,omitempty"`
+	ClaudeConfigDir string                  `yaml:"claude_config_dir,omitempty"`
+	WorkingDir      string                  `yaml:"working_dir,omitempty"` // agent CWD (default ".")
+	Worktree        *WorktreeConfig         `yaml:"worktree,omitempty"`   // git worktree settings
+	Instructions    string                  `yaml:"instructions"`
+	Permissions     Permissions             `yaml:"permissions,omitempty"`
+	Heartbeat       *HeartbeatConfig        `yaml:"heartbeat,omitempty"`
+	Hooks           yaml.Node               `yaml:"hooks,omitempty"`      // passed through as-is to settings.json
+	Settings        yaml.Node               `yaml:"settings,omitempty"`   // extra settings.json keys
+	Variables       map[string]tmpl.VarDef  `yaml:"variables,omitempty"`  // template variable definitions
 }
 
 // ResolveWorkingDir returns the absolute path for the agent's working directory.
@@ -236,6 +239,66 @@ func LoadRoleFrom(path string) (*Role, error) {
 	if err := yaml.Unmarshal(data, &role); err != nil {
 		return nil, fmt.Errorf("parse role YAML: %w", err)
 	}
+
+	if err := role.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid role %q: %w", path, err)
+	}
+
+	return &role, nil
+}
+
+// LoadRoleRendered loads a role by name, rendering it with the given template context.
+// If ctx is nil, behaves like LoadRole (no rendering — backward compat).
+func LoadRoleRendered(name string, ctx *tmpl.Context) (*Role, error) {
+	path := filepath.Join(RolesDir(), name+".yaml")
+	return LoadRoleRenderedFrom(path, ctx)
+}
+
+// LoadRoleRenderedFrom loads a role from the given file path, rendering it with
+// the given template context. If ctx is nil, behaves like LoadRoleFrom.
+func LoadRoleRenderedFrom(path string, ctx *tmpl.Context) (*Role, error) {
+	if ctx == nil {
+		return LoadRoleFrom(path)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read role file: %w", err)
+	}
+
+	// Extract variables section before rendering.
+	defs, remaining, err := tmpl.ParseVarDefs(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse variables in role %q: %w", path, err)
+	}
+
+	// Fill in defaults for optional variables not already provided.
+	if ctx.Var == nil {
+		ctx.Var = make(map[string]string)
+	}
+	for name, def := range defs {
+		if _, ok := ctx.Var[name]; !ok && def.Default != nil {
+			ctx.Var[name] = *def.Default
+		}
+	}
+
+	// Validate that all required variables are present.
+	if err := tmpl.ValidateVars(defs, ctx.Var); err != nil {
+		return nil, fmt.Errorf("role %q: %w", filepath.Base(path), err)
+	}
+
+	// Render template.
+	rendered, err := tmpl.Render(remaining, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("template error in role %q (%s): %w", filepath.Base(path), path, err)
+	}
+
+	var role Role
+	if err := yaml.Unmarshal([]byte(rendered), &role); err != nil {
+		return nil, fmt.Errorf("parse rendered role YAML %q: %w", path, err)
+	}
+
+	role.Variables = defs
 
 	if err := role.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid role %q: %w", path, err)
