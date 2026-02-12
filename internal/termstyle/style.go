@@ -51,9 +51,17 @@ func Cyan(s string) string { return wrap("\033[36m", s) }
 // Gray renders text in gray/white.
 func Gray(s string) string { return wrap("\033[37m", s) }
 
-// Symbols for status indicators.
-func GreenDot() string  { return Green("●") }
+// GreenDot returns a green filled circle (active/ok status).
+func GreenDot() string { return Green("●") }
+
+// YellowDot returns a yellow open circle (idle status).
 func YellowDot() string { return Yellow("○") }
-func RedDot() string    { return Red("●") }
-func GrayDot() string   { return Gray("○") }
-func RedX() string      { return Red("✗") }
+
+// RedDot returns a red filled circle (exited/error status).
+func RedDot() string { return Red("●") }
+
+// GrayDot returns a gray open circle (unknown status).
+func GrayDot() string { return Gray("○") }
+
+// RedX returns a red cross mark (unresponsive).
+func RedX() string { return Red("✗") }
