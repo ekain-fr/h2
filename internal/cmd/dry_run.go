@@ -25,6 +25,8 @@ type ResolvedAgentConfig struct {
 	Overrides       []string
 	EnvVars         map[string]string
 	ChildArgs       []string
+	RoleScope       string            // "pod" or "global" — set by pod dry-run
+	MergedVars      map[string]string // final merged vars — set by pod dry-run
 }
 
 // resolveAgentConfig computes all values needed to launch an agent without
@@ -212,5 +214,44 @@ func printDryRun(rc *ResolvedAgentConfig) {
 	if len(rc.Overrides) > 0 {
 		fmt.Println()
 		fmt.Printf("Overrides: %s\n", strings.Join(rc.Overrides, ", "))
+	}
+
+	// Merged vars (pod dry-run only).
+	if len(rc.MergedVars) > 0 {
+		fmt.Println()
+		fmt.Println("Variables:")
+		for k, v := range rc.MergedVars {
+			fmt.Printf("  %s=%s\n", k, v)
+		}
+	}
+
+	// Role scope (pod dry-run only).
+	if rc.RoleScope != "" {
+		fmt.Printf("Role Scope: %s\n", rc.RoleScope)
+	}
+}
+
+// printPodDryRun displays the full pod expansion without launching.
+func printPodDryRun(templateName string, pod string, agents []*ResolvedAgentConfig) {
+	fmt.Printf("Pod: %s\n", pod)
+	fmt.Printf("Template: %s\n", templateName)
+	fmt.Printf("Agents: %d\n", len(agents))
+
+	// Collect roles used.
+	roleSet := make(map[string]bool)
+	for _, rc := range agents {
+		roleSet[rc.Role.Name] = true
+	}
+	var roles []string
+	for r := range roleSet {
+		roles = append(roles, r)
+	}
+	fmt.Printf("Roles: %s\n", strings.Join(roles, ", "))
+
+	// Print each agent.
+	for i, rc := range agents {
+		fmt.Println()
+		fmt.Printf("--- Agent %d/%d ---\n", i+1, len(agents))
+		printDryRun(rc)
 	}
 }

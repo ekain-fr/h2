@@ -44,6 +44,14 @@ func LoadPodRole(name string) (*Role, error) {
 	return LoadRole(name)
 }
 
+// IsPodScopedRole returns true if the role exists under pods/roles/ (pod-scoped),
+// false if it would fall back to the global roles/ directory.
+func IsPodScopedRole(name string) bool {
+	podPath := filepath.Join(PodRolesDir(), name+".yaml")
+	_, err := os.Stat(podPath)
+	return err == nil
+}
+
 // LoadPodRoleRendered loads a role with template rendering, checking pod roles
 // first then global roles. If ctx is nil, behaves like LoadPodRole.
 func LoadPodRoleRendered(name string, ctx *tmpl.Context) (*Role, error) {

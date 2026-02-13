@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -422,13 +423,289 @@ func TestPrintDryRun_InstructionsArgTruncated(t *testing.T) {
 	}
 }
 
+func TestPrintPodDryRun_Header(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	agents := []*ResolvedAgentConfig{
+		{
+			Name:    "coder-1",
+			Role:    &config.Role{Name: "coder", Instructions: "Code stuff"},
+			Command: "claude",
+			Pod:     "my-pod",
+			EnvVars: map[string]string{"H2_ACTOR": "coder-1", "H2_POD": "my-pod"},
+		},
+		{
+			Name:    "coder-2",
+			Role:    &config.Role{Name: "coder", Instructions: "Code stuff"},
+			Command: "claude",
+			Pod:     "my-pod",
+			EnvVars: map[string]string{"H2_ACTOR": "coder-2", "H2_POD": "my-pod"},
+		},
+		{
+			Name:    "reviewer",
+			Role:    &config.Role{Name: "reviewer", Instructions: "Review stuff"},
+			Command: "claude",
+			Pod:     "my-pod",
+			EnvVars: map[string]string{"H2_ACTOR": "reviewer", "H2_POD": "my-pod"},
+		},
+	}
+
+	output := captureStdout(func() {
+		printPodDryRun("backend", "my-pod", agents)
+	})
+
+	checks := []string{
+		"Pod: my-pod",
+		"Template: backend",
+		"Agents: 3",
+		"--- Agent 1/3 ---",
+		"Agent: coder-1",
+		"--- Agent 2/3 ---",
+		"Agent: coder-2",
+		"--- Agent 3/3 ---",
+		"Agent: reviewer",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+	// Roles summary should contain both roles.
+	if !strings.Contains(output, "Roles:") {
+		t.Errorf("should show Roles line, got:\n%s", output)
+	}
+}
+
+func TestPrintPodDryRun_RoleScopeAndVars(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	agents := []*ResolvedAgentConfig{
+		{
+			Name:       "worker",
+			Role:       &config.Role{Name: "coder", Instructions: "Code"},
+			Command:    "claude",
+			Pod:        "my-pod",
+			EnvVars:    map[string]string{"H2_ACTOR": "worker"},
+			RoleScope:  "pod",
+			MergedVars: map[string]string{"team": "backend", "env": "prod"},
+		},
+	}
+
+	output := captureStdout(func() {
+		printPodDryRun("test-tmpl", "my-pod", agents)
+	})
+
+	checks := []string{
+		"Role Scope: pod",
+		"Variables:",
+		"team=backend",
+		"env=prod",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
+func TestPrintPodDryRun_GlobalRoleScope(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	agents := []*ResolvedAgentConfig{
+		{
+			Name:      "worker",
+			Role:      &config.Role{Name: "default", Instructions: "Default"},
+			Command:   "claude",
+			Pod:       "my-pod",
+			EnvVars:   map[string]string{"H2_ACTOR": "worker"},
+			RoleScope: "global",
+		},
+	}
+
+	output := captureStdout(func() {
+		printPodDryRun("test-tmpl", "my-pod", agents)
+	})
+
+	if !strings.Contains(output, "Role Scope: global") {
+		t.Errorf("should show global role scope, got:\n%s", output)
+	}
+}
+
+func TestPodDryRun_WithFixtures(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	// Create a pod template with 2 agents.
+	tmplContent := `pod_name: test-pod
+agents:
+  - name: builder
+    role: default
+  - name: tester
+    role: default
+`
+	os.WriteFile(filepath.Join(h2Root, "pods", "templates", "simple.yaml"), []byte(tmplContent), 0o644)
+
+	// Create the default role.
+	roleContent := "name: default\ninstructions: |\n  Do work.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	// Execute via the cobra command with --dry-run.
+	output := captureStdout(func() {
+		cmd := newPodLaunchCmd()
+		cmd.SetArgs([]string{"--dry-run", "simple"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	checks := []string{
+		"Pod: test-pod",
+		"Template: simple",
+		"Agents: 2",
+		"Agent: builder",
+		"Agent: tester",
+		"Role: default",
+		"Role Scope: global",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
+func TestPodDryRun_WithCountExpansion(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	tmplContent := `pod_name: count-pod
+agents:
+  - name: worker
+    role: default
+    count: 3
+`
+	os.WriteFile(filepath.Join(h2Root, "pods", "templates", "counted.yaml"), []byte(tmplContent), 0o644)
+
+	roleContent := "name: default\ninstructions: |\n  Do work.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newPodLaunchCmd()
+		cmd.SetArgs([]string{"--dry-run", "counted"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	checks := []string{
+		"Agents: 3",
+		"Agent: worker-1",
+		"Agent: worker-2",
+		"Agent: worker-3",
+		"--- Agent 1/3 ---",
+		"--- Agent 3/3 ---",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
+func TestPodDryRun_PodScopedRole(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	tmplContent := `pod_name: scope-test
+agents:
+  - name: agent-a
+    role: special
+  - name: agent-b
+    role: default
+`
+	os.WriteFile(filepath.Join(h2Root, "pods", "templates", "scoped.yaml"), []byte(tmplContent), 0o644)
+
+	// Pod-scoped role.
+	podRoleContent := "name: special\ninstructions: |\n  Pod-scoped instructions.\n"
+	os.WriteFile(filepath.Join(h2Root, "pods", "roles", "special.yaml"), []byte(podRoleContent), 0o644)
+
+	// Global role.
+	globalRoleContent := "name: default\ninstructions: |\n  Global instructions.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(globalRoleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newPodLaunchCmd()
+		cmd.SetArgs([]string{"--dry-run", "scoped"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// agent-a should show pod scope, agent-b should show global scope.
+	// Split output by agent sections.
+	sections := strings.Split(output, "--- Agent")
+	if len(sections) < 3 {
+		t.Fatalf("expected 2 agent sections, got %d sections", len(sections)-1)
+	}
+
+	agentASection := sections[1]
+	agentBSection := sections[2]
+
+	if !strings.Contains(agentASection, "Role Scope: pod") {
+		t.Errorf("agent-a should have pod role scope, got:\n%s", agentASection)
+	}
+	if !strings.Contains(agentBSection, "Role Scope: global") {
+		t.Errorf("agent-b should have global role scope, got:\n%s", agentBSection)
+	}
+}
+
+func TestPodDryRun_WithVars(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	tmplContent := `pod_name: var-pod
+agents:
+  - name: worker
+    role: default
+    vars:
+      team: backend
+`
+	os.WriteFile(filepath.Join(h2Root, "pods", "templates", "withvars.yaml"), []byte(tmplContent), 0o644)
+
+	roleContent := "name: default\ninstructions: |\n  Do work.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newPodLaunchCmd()
+		cmd.SetArgs([]string{"--dry-run", "--var", "env=prod", "withvars"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Should show merged vars: team from template, env from CLI.
+	checks := []string{
+		"Variables:",
+		"team=backend",
+		"env=prod",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
 // capturePrintDryRun captures stdout from printDryRun.
 func capturePrintDryRun(rc *ResolvedAgentConfig) string {
+	return captureStdout(func() {
+		printDryRun(rc)
+	})
+}
+
+// captureStdout captures stdout from a function call.
+func captureStdout(fn func()) string {
 	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	printDryRun(rc)
+	fn()
 
 	w.Close()
 	os.Stdout = old
