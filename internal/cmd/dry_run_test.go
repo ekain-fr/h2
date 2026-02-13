@@ -963,6 +963,45 @@ func TestRunDryRun_RequiresRole(t *testing.T) {
 	}
 }
 
+func TestRunDryRun_InvalidDefaultRoleShowsValidationError(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	// Create an invalid default role (missing both instructions and system_prompt).
+	roleContent := "name: default\ndescription: broken role\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"--dry-run"})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error for invalid default role")
+	}
+	// Should show the validation error, NOT the generic "no default role found" message.
+	if strings.Contains(err.Error(), "no default role found") {
+		t.Errorf("should show validation error, not 'no default role found', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid role") {
+		t.Errorf("should contain validation error details, got: %v", err)
+	}
+}
+
+func TestRunDryRun_MissingDefaultRoleShowsFriendlyMessage(t *testing.T) {
+	setupPodTestEnv(t)
+
+	// No role files created — default role doesn't exist.
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"--dry-run"})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error for missing default role")
+	}
+	if !strings.Contains(err.Error(), "no default role found") {
+		t.Errorf("should show friendly 'no default role found' message, got: %v", err)
+	}
+}
+
 // capturePrintDryRun captures stdout from printDryRun.
 func capturePrintDryRun(rc *ResolvedAgentConfig) string {
 	return captureStdout(func() {
