@@ -49,7 +49,7 @@ description: "Designs systems and reviews architecture decisions"
 # Model selection
 model: opus
 
-# Instructions — becomes CLAUDE.md content
+# Instructions — passed to Claude Code via --append-system-prompt
 instructions: |
   You are an architect agent. Your responsibilities:
   - Design system architecture for requested features
@@ -146,10 +146,15 @@ When `h2 run --role architect --name arch-1` launches, h2 creates:
 ```
 ~/.h2/sessions/arch-1/
 ├── .claude/
-│   ├── CLAUDE.md          # Generated from role instructions
 │   └── settings.json      # Generated from role permissions + hooks + settings
 └── permission-reviewer.md # Instructions for AI permission reviewer
 ```
+
+Role instructions are passed directly to the Claude process via the
+`--append-system-prompt` flag (not written as CLAUDE.md). This appends to
+Claude Code's default system prompt, preserving its built-in tool usage
+instructions. The config directory is shared across parallel agents of the
+same role, so writing per-agent CLAUDE.md files would conflict.
 
 The agent's Claude Code instance is launched with its config directory pointing
 at `~/.h2/sessions/<name>/.claude/`. This isolates each agent's config while
@@ -344,19 +349,19 @@ h2 run --role architect --name arch-1
   → load ~/.h2/roles/architect.yaml
   → validate role (required fields, permission syntax)
   → create ~/.h2/sessions/arch-1/
-  → generate .claude/CLAUDE.md from role instructions
   → generate .claude/settings.json from role (permissions + hooks + settings)
   → write permission-reviewer.md from role permissions.agent.instructions
   → generate session UUID
-  → ForkDaemon(name, sessionID, "claude", args)
+  → ForkDaemon(name, sessionID, "claude", args, instructions)
     → daemon sets ExtraEnv with:
         H2_ACTOR=arch-1
         H2_ROLE=architect
         H2_SESSION_DIR=~/.h2/sessions/arch-1
         CLAUDE_CONFIG_DIR=~/.h2/sessions/arch-1/.claude
         (+ OTEL env vars from collector)
-    → starts claude with --session-id <uuid>
-    → claude reads CLAUDE.md and settings.json from the config dir
+    → starts claude with --session-id <uuid> --append-system-prompt <instructions>
+    → instructions are appended to Claude Code's default system prompt
+    → claude reads settings.json from the config dir
 ```
 
 ### `--role` flag on `h2 run`

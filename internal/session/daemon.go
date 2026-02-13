@@ -38,6 +38,7 @@ type RunDaemonOpts struct {
 	RoleName        string
 	SessionDir      string
 	ClaudeConfigDir string
+	Instructions    string // role instructions to pass via --append-system-prompt
 	Heartbeat       DaemonHeartbeat
 	Overrides       map[string]string // --override key=value pairs for metadata
 }
@@ -50,6 +51,7 @@ func RunDaemon(opts RunDaemonOpts) error {
 	s.RoleName = opts.RoleName
 	s.SessionDir = opts.SessionDir
 	s.ClaudeConfigDir = opts.ClaudeConfigDir
+	s.Instructions = opts.Instructions
 	s.HeartbeatIdleTimeout = opts.Heartbeat.IdleTimeout
 	s.HeartbeatMessage = opts.Heartbeat.Message
 	s.HeartbeatCondition = opts.Heartbeat.Condition
@@ -225,6 +227,7 @@ type ForkDaemonOpts struct {
 	RoleName        string
 	SessionDir      string
 	ClaudeConfigDir string
+	Instructions    string // role instructions to pass via --append-system-prompt
 	Heartbeat       DaemonHeartbeat
 	CWD             string   // working directory for the child process
 	Pod             string   // pod name (set as H2_POD env var)
@@ -255,6 +258,9 @@ func ForkDaemon(opts ForkDaemonOpts) error {
 		if opts.Heartbeat.Condition != "" {
 			daemonArgs = append(daemonArgs, "--heartbeat-condition", opts.Heartbeat.Condition)
 		}
+	}
+	if opts.Instructions != "" {
+		daemonArgs = append(daemonArgs, "--instructions", opts.Instructions)
 	}
 	for _, ov := range opts.Overrides {
 		daemonArgs = append(daemonArgs, "--override", ov)
