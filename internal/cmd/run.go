@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -102,11 +103,13 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 					role, err = config.LoadRoleRendered(roleName, ctx)
 				}
 				if err != nil {
-					if roleName == "concierge" {
-						return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
-					}
-					if roleName == "default" {
-						return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
+					if errors.Is(err, os.ErrNotExist) {
+						if roleName == "concierge" {
+							return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
+						}
+						if roleName == "default" {
+							return fmt.Errorf("no default role found; create one with 'h2 role init default' or specify --role, --agent-type, or --command")
+						}
 					}
 					return fmt.Errorf("load role %q: %w", roleName, err)
 				}

@@ -92,10 +92,26 @@ func resolveAgentConfig(name string, role *config.Role, pod string, overrides []
 	}
 
 	// Build child args: what the claude command would receive.
+	// Mirrors Session.childArgs() in session.go.
 	var childArgs []string
 	childArgs = append(childArgs, "--session-id", "<generated-uuid>")
+	if role.SystemPrompt != "" {
+		childArgs = append(childArgs, "--system-prompt", role.SystemPrompt)
+	}
 	if role.Instructions != "" {
 		childArgs = append(childArgs, "--append-system-prompt", role.Instructions)
+	}
+	if role.Model != "" {
+		childArgs = append(childArgs, "--model", role.Model)
+	}
+	if role.PermissionMode != "" {
+		childArgs = append(childArgs, "--permission-mode", role.PermissionMode)
+	}
+	if len(role.Permissions.Allow) > 0 {
+		childArgs = append(childArgs, "--allowedTools", strings.Join(role.Permissions.Allow, ","))
+	}
+	if len(role.Permissions.Deny) > 0 {
+		childArgs = append(childArgs, "--disallowedTools", strings.Join(role.Permissions.Deny, ","))
 	}
 
 	return &ResolvedAgentConfig{
@@ -126,6 +142,23 @@ func printDryRun(rc *ResolvedAgentConfig) {
 	if role.Model != "" {
 		fmt.Printf("Model: %s\n", role.Model)
 	}
+	if role.PermissionMode != "" {
+		fmt.Printf("Permission Mode: %s\n", role.PermissionMode)
+	}
+
+	// System prompt (truncated with line count).
+	if role.SystemPrompt != "" {
+		lines := strings.Split(role.SystemPrompt, "\n")
+		fmt.Printf("\nSystem Prompt: (%d lines)\n", len(lines))
+		const maxLines = 10
+		for i, line := range lines {
+			if i >= maxLines {
+				fmt.Printf("  ... (%d more lines)\n", len(lines)-maxLines)
+				break
+			}
+			fmt.Printf("  %s\n", line)
+		}
+	}
 
 	fmt.Println()
 
@@ -146,10 +179,15 @@ func printDryRun(rc *ResolvedAgentConfig) {
 	fmt.Println()
 	fmt.Printf("Command: %s\n", rc.Command)
 	if len(rc.ChildArgs) > 0 {
-		// Show args with instructions value truncated for readability.
+		// Show args with long values truncated for readability.
 		var displayArgs []string
 		for i := 0; i < len(rc.ChildArgs); i++ {
-			if rc.ChildArgs[i] == "--append-system-prompt" && i+1 < len(rc.ChildArgs) {
+			if rc.ChildArgs[i] == "--system-prompt" && i+1 < len(rc.ChildArgs) {
+				displayArgs = append(displayArgs, rc.ChildArgs[i])
+				lines := strings.Count(rc.ChildArgs[i+1], "\n") + 1
+				displayArgs = append(displayArgs, fmt.Sprintf("<system-prompt: %d lines>", lines))
+				i++ // skip the value
+			} else if rc.ChildArgs[i] == "--append-system-prompt" && i+1 < len(rc.ChildArgs) {
 				displayArgs = append(displayArgs, rc.ChildArgs[i])
 				lines := strings.Count(rc.ChildArgs[i+1], "\n") + 1
 				displayArgs = append(displayArgs, fmt.Sprintf("<instructions: %d lines>", lines))

@@ -164,6 +164,16 @@ agent_type: claude
 # Model to use for this role
 model: opus
 
+# Permission mode for Claude Code
+# Valid: default, delegate, acceptEdits, plan, dontAsk, bypassPermissions
+# permission_mode: default
+
+# System prompt — replaces Claude Code's entire default system prompt.
+# Use this when you need full control over the prompt. Usually you want
+# "instructions" instead, which appends to the default system prompt.
+# system_prompt: |
+#   You are a specialized agent that ...
+
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.
 # Set to ~/ to use the system default (no override).
@@ -250,6 +260,16 @@ agent_type: claude
 
 # Model to use for this role
 model: opus
+
+# Permission mode for Claude Code
+# Valid: default, delegate, acceptEdits, plan, dontAsk, bypassPermissions
+# permission_mode: default
+
+# System prompt — replaces Claude Code's entire default system prompt.
+# Use this when you need full control over the prompt. Usually you want
+# "instructions" instead, which appends to the default system prompt.
+# system_prompt: |
+#   You are a specialized agent that ...
 
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.

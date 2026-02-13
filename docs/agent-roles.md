@@ -46,10 +46,23 @@ prose with structure.
 name: architect
 description: "Designs systems and reviews architecture decisions"
 
-# Model selection
+# Model selection — passed to Claude Code via --model
 model: opus
 
-# Instructions — passed to Claude Code via --append-system-prompt
+# Permission mode — passed to Claude Code via --permission-mode
+# Valid values: default, delegate, acceptEdits, plan, dontAsk, bypassPermissions
+# permission_mode: plan
+
+# System prompt — replaces Claude Code's entire default system prompt (--system-prompt).
+# Use this when you need full control over the prompt. Mutually exclusive in
+# practice with "instructions" — use one or the other, or both if the role needs
+# a custom base prompt plus additional context appended to it.
+# system_prompt: |
+#   You are a specialized architecture reviewer...
+
+# Instructions — appended to Claude Code's default system prompt (--append-system-prompt).
+# This is the most common choice: the agent keeps Claude Code's built-in tool usage
+# instructions and gets your role-specific guidance on top.
 instructions: |
   You are an architect agent. Your responsibilities:
   - Design system architecture for requested features

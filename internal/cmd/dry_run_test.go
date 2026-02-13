@@ -423,6 +423,149 @@ func TestPrintDryRun_InstructionsArgTruncated(t *testing.T) {
 	}
 }
 
+func TestResolveAgentConfig_ChildArgsIncludeSystemPrompt(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	role := &config.Role{
+		Name:         "test-role",
+		SystemPrompt: "You are a custom agent.\nDo custom things.",
+	}
+
+	rc, err := resolveAgentConfig("test-agent", role, "", nil)
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+
+	found := false
+	for i, arg := range rc.ChildArgs {
+		if arg == "--system-prompt" && i+1 < len(rc.ChildArgs) {
+			found = true
+			if rc.ChildArgs[i+1] != "You are a custom agent.\nDo custom things." {
+				t.Errorf("--system-prompt value = %q, want %q", rc.ChildArgs[i+1], "You are a custom agent.\nDo custom things.")
+			}
+		}
+	}
+	if !found {
+		t.Error("ChildArgs should contain --system-prompt")
+	}
+}
+
+func TestResolveAgentConfig_ChildArgsIncludeNewFields(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	role := &config.Role{
+		Name:           "test-role",
+		Instructions:   "Do work",
+		Model:          "opus",
+		PermissionMode: "plan",
+		Permissions: config.Permissions{
+			Allow: []string{"Read", "Write"},
+			Deny:  []string{"Bash(rm *)"},
+		},
+	}
+
+	rc, err := resolveAgentConfig("test-agent", role, "", nil)
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+
+	checks := map[string]string{
+		"--model":           "opus",
+		"--permission-mode": "plan",
+		"--allowedTools":    "Read,Write",
+		"--disallowedTools": "Bash(rm *)",
+	}
+	for flag, want := range checks {
+		found := false
+		for i, arg := range rc.ChildArgs {
+			if arg == flag && i+1 < len(rc.ChildArgs) {
+				found = true
+				if rc.ChildArgs[i+1] != want {
+					t.Errorf("%s value = %q, want %q", flag, rc.ChildArgs[i+1], want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("ChildArgs should contain %s", flag)
+		}
+	}
+}
+
+func TestPrintDryRun_SystemPromptTruncated(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	// Build system prompt with 15 lines.
+	var lines []string
+	for i := 0; i < 15; i++ {
+		lines = append(lines, fmt.Sprintf("System line %d", i+1))
+	}
+	role := &config.Role{
+		Name:         "test-role",
+		SystemPrompt: strings.Join(lines, "\n"),
+	}
+
+	rc, err := resolveAgentConfig("test-agent", role, "", nil)
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+
+	output := capturePrintDryRun(rc)
+
+	if !strings.Contains(output, "System Prompt: (15 lines)") {
+		t.Errorf("should show system prompt line count, got:\n%s", output)
+	}
+	if !strings.Contains(output, "... (5 more lines)") {
+		t.Errorf("should show truncation message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "System line 1") {
+		t.Errorf("should show first line, got:\n%s", output)
+	}
+	if strings.Contains(output, "System line 11") {
+		t.Errorf("should NOT show line 11, got:\n%s", output)
+	}
+}
+
+func TestPrintDryRun_PermissionMode(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	role := &config.Role{
+		Name:           "test-role",
+		Instructions:   "Test",
+		PermissionMode: "plan",
+	}
+
+	rc, err := resolveAgentConfig("test-agent", role, "", nil)
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+
+	output := capturePrintDryRun(rc)
+
+	if !strings.Contains(output, "Permission Mode: plan") {
+		t.Errorf("should show permission mode, got:\n%s", output)
+	}
+}
+
+func TestPrintDryRun_SystemPromptArgTruncated(t *testing.T) {
+	t.Setenv("H2_DIR", "")
+
+	role := &config.Role{
+		Name:         "test-role",
+		SystemPrompt: "Line 1\nLine 2\nLine 3",
+	}
+
+	rc, err := resolveAgentConfig("test-agent", role, "", nil)
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+
+	output := capturePrintDryRun(rc)
+
+	if !strings.Contains(output, "<system-prompt: 3 lines>") {
+		t.Errorf("Args should show truncated system-prompt placeholder, got:\n%s", output)
+	}
+}
+
 func TestPrintPodDryRun_Header(t *testing.T) {
 	t.Setenv("H2_DIR", "")
 
@@ -817,6 +960,45 @@ func TestRunDryRun_RequiresRole(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--dry-run requires a role") {
 		t.Errorf("expected error about --dry-run requiring a role, got: %v", err)
+	}
+}
+
+func TestRunDryRun_InvalidDefaultRoleShowsValidationError(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	// Create an invalid default role (missing both instructions and system_prompt).
+	roleContent := "name: default\ndescription: broken role\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"--dry-run"})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error for invalid default role")
+	}
+	// Should show the validation error, NOT the generic "no default role found" message.
+	if strings.Contains(err.Error(), "no default role found") {
+		t.Errorf("should show validation error, not 'no default role found', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "invalid role") {
+		t.Errorf("should contain validation error details, got: %v", err)
+	}
+}
+
+func TestRunDryRun_MissingDefaultRoleShowsFriendlyMessage(t *testing.T) {
+	setupPodTestEnv(t)
+
+	// No role files created — default role doesn't exist.
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"--dry-run"})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error for missing default role")
+	}
+	if !strings.Contains(err.Error(), "no default role found") {
+		t.Errorf("should show friendly 'no default role found' message, got: %v", err)
 	}
 }
 
