@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"h2/internal/config"
@@ -220,8 +221,13 @@ func printDryRun(rc *ResolvedAgentConfig) {
 	if len(rc.MergedVars) > 0 {
 		fmt.Println()
 		fmt.Println("Variables:")
-		for k, v := range rc.MergedVars {
-			fmt.Printf("  %s=%s\n", k, v)
+		var varKeys []string
+		for k := range rc.MergedVars {
+			varKeys = append(varKeys, k)
+		}
+		sort.Strings(varKeys)
+		for _, k := range varKeys {
+			fmt.Printf("  %s=%s\n", k, rc.MergedVars[k])
 		}
 	}
 
@@ -246,6 +252,7 @@ func printPodDryRun(templateName string, pod string, agents []*ResolvedAgentConf
 	for r := range roleSet {
 		roles = append(roles, r)
 	}
+	sort.Strings(roles)
 	fmt.Printf("Roles: %s\n", strings.Join(roles, ", "))
 
 	// Print each agent.
