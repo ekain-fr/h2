@@ -18,6 +18,7 @@ func newDaemonCmd() *cobra.Command {
 	var roleName string
 	var sessionDir string
 	var claudeConfigDir string
+	var instructions string
 	var heartbeatIdleTimeout string
 	var heartbeatMessage string
 	var heartbeatCondition string
@@ -64,6 +65,7 @@ func newDaemonCmd() *cobra.Command {
 				RoleName:        roleName,
 				SessionDir:      sessionDir,
 				ClaudeConfigDir: claudeConfigDir,
+				Instructions:    instructions,
 				Heartbeat:       heartbeat,
 				Overrides:       overrideMap,
 			})
@@ -82,6 +84,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&roleName, "role", "", "Role name")
 	cmd.Flags().StringVar(&sessionDir, "session-dir", "", "Session directory path")
 	cmd.Flags().StringVar(&claudeConfigDir, "claude-config-dir", "", "Claude config directory")
+	cmd.Flags().StringVar(&instructions, "instructions", "", "Role instructions to pass via --append-system-prompt")
 	cmd.Flags().StringVar(&heartbeatIdleTimeout, "heartbeat-idle-timeout", "", "Heartbeat idle timeout duration")
 	cmd.Flags().StringVar(&heartbeatMessage, "heartbeat-message", "", "Heartbeat nudge message")
 	cmd.Flags().StringVar(&heartbeatCondition, "heartbeat-condition", "", "Heartbeat condition command")

@@ -30,6 +30,7 @@ type Session struct {
 	RoleName       string // Role name, if launched with --role
 	SessionDir     string // Session directory path (~/.h2/sessions/<name>/)
 	ClaudeConfigDir string // Shared Claude config dir (used as CLAUDE_CONFIG_DIR)
+	Instructions   string // Role instructions, passed via --append-system-prompt
 	Queue      *message.MessageQueue
 	AgentName  string
 	Agent      *agent.Agent
@@ -117,13 +118,20 @@ func (s *Session) initVT(rows, cols int) {
 }
 
 // childArgs returns the command args, prepending any agent-type-specific args
-// (e.g. --session-id for Claude Code).
+// (e.g. --session-id for Claude Code) and appending --append-system-prompt
+// when role instructions are present.
 func (s *Session) childArgs() []string {
 	prepend := s.Agent.PrependArgs(s.SessionID)
-	if len(prepend) == 0 {
-		return s.Args
+	var args []string
+	if len(prepend) > 0 {
+		args = append(prepend, s.Args...)
+	} else {
+		args = s.Args
 	}
-	return append(prepend, s.Args...)
+	if s.Instructions != "" {
+		args = append(args, "--append-system-prompt", s.Instructions)
+	}
+	return args
 }
 
 // NewClient creates a new Client with all session callbacks wired.

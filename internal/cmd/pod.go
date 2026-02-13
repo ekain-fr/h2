@@ -10,6 +10,7 @@ import (
 	"h2/internal/config"
 	"h2/internal/session/message"
 	"h2/internal/socketdir"
+	"h2/internal/tmpl"
 )
 
 func newPodCmd() *cobra.Command {
@@ -26,6 +27,8 @@ func newPodCmd() *cobra.Command {
 
 func newPodLaunchCmd() *cobra.Command {
 	var podName string
+	var dryRun bool
+	var varFlags []string
 
 	cmd := &cobra.Command{
 		Use:   "launch <template>",
@@ -34,7 +37,18 @@ func newPodLaunchCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			templateName := args[0]
 
-			tmpl, err := config.LoadPodTemplate(templateName)
+			// Parse --var flags.
+			cliVars, err := parseVarFlags(varFlags)
+			if err != nil {
+				return err
+			}
+
+			// Phase 1: Load and render pod template.
+			podCtx := &tmpl.Context{
+				H2Dir: config.ConfigDir(),
+				Var:   cliVars,
+			}
+			pt, err := config.LoadPodTemplateRendered(templateName, podCtx)
 			if err != nil {
 				return fmt.Errorf("load template %q: %w", templateName, err)
 			}
@@ -42,25 +56,36 @@ func newPodLaunchCmd() *cobra.Command {
 			// Use --pod flag, or template's pod_name, or template file name.
 			pod := podName
 			if pod == "" {
-				pod = tmpl.PodName
+				pod = pt.PodName
 			}
 			if pod == "" {
 				pod = templateName
 			}
+			podCtx.PodName = pod
 
 			if err := config.ValidatePodName(pod); err != nil {
 				return err
 			}
 
-			if len(tmpl.Agents) == 0 {
+			// Phase 2: Expand count groups.
+			expanded, err := config.ExpandPodAgents(pt)
+			if err != nil {
+				return fmt.Errorf("expand template %q: %w", templateName, err)
+			}
+
+			if len(expanded) == 0 {
 				return fmt.Errorf("template %q has no agents", templateName)
+			}
+
+			if dryRun {
+				return podDryRun(templateName, pod, expanded, cliVars)
 			}
 
 			// Build a set of already-running agents in this pod.
 			running := podRunningAgents(pod)
 
 			var started, skipped int
-			for _, agent := range tmpl.Agents {
+			for _, agent := range expanded {
 				if running[agent.Name] {
 					fmt.Fprintf(os.Stderr, "  %s already running\n", agent.Name)
 					skipped++
@@ -72,7 +97,27 @@ func newPodLaunchCmd() *cobra.Command {
 					roleName = "default"
 				}
 
-				role, err := config.LoadPodRole(roleName)
+				// Merge vars: pod template agent vars < CLI vars.
+				mergedVars := make(map[string]string)
+				for k, v := range agent.Vars {
+					mergedVars[k] = v
+				}
+				for k, v := range cliVars {
+					mergedVars[k] = v
+				}
+
+				// Build per-agent template context.
+				roleCtx := &tmpl.Context{
+					AgentName: agent.Name,
+					RoleName:  roleName,
+					PodName:   pod,
+					Index:     agent.Index,
+					Count:     agent.Count,
+					H2Dir:     config.ConfigDir(),
+					Var:       mergedVars,
+				}
+
+				role, err := config.LoadPodRoleRendered(roleName, roleCtx)
 				if err != nil {
 					return fmt.Errorf("load role %q for agent %q: %w", roleName, agent.Name, err)
 				}
@@ -98,8 +143,65 @@ func newPodLaunchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&podName, "pod", "", "Override pod name (default: template's pod_name or template name)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show resolved pod config without launching")
+	cmd.Flags().StringArrayVar(&varFlags, "var", nil, "Set template variable (key=value, repeatable)")
 
 	return cmd
+}
+
+// podDryRun resolves all agent configs in a pod and prints them without launching.
+func podDryRun(templateName string, pod string, expanded []config.ExpandedAgent, cliVars map[string]string) error {
+	var resolved []*ResolvedAgentConfig
+
+	for _, agent := range expanded {
+		roleName := agent.Role
+		if roleName == "" {
+			roleName = "default"
+		}
+
+		// Merge vars: pod template agent vars < CLI vars.
+		mergedVars := make(map[string]string)
+		for k, v := range agent.Vars {
+			mergedVars[k] = v
+		}
+		for k, v := range cliVars {
+			mergedVars[k] = v
+		}
+
+		// Build per-agent template context.
+		roleCtx := &tmpl.Context{
+			AgentName: agent.Name,
+			RoleName:  roleName,
+			PodName:   pod,
+			Index:     agent.Index,
+			Count:     agent.Count,
+			H2Dir:     config.ConfigDir(),
+			Var:       mergedVars,
+		}
+
+		role, err := config.LoadPodRoleRendered(roleName, roleCtx)
+		if err != nil {
+			return fmt.Errorf("load role %q for agent %q: %w", roleName, agent.Name, err)
+		}
+
+		rc, err := resolveAgentConfig(agent.Name, role, pod, nil)
+		if err != nil {
+			return fmt.Errorf("resolve agent %q: %w", agent.Name, err)
+		}
+
+		// Annotate with pod-specific info.
+		rc.MergedVars = mergedVars
+		if config.IsPodScopedRole(roleName) {
+			rc.RoleScope = "pod"
+		} else {
+			rc.RoleScope = "global"
+		}
+
+		resolved = append(resolved, rc)
+	}
+
+	printPodDryRun(templateName, pod, resolved)
+	return nil
 }
 
 func newPodStopCmd() *cobra.Command {

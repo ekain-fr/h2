@@ -86,6 +86,7 @@ func doSetupAndForkAgent(name string, role *config.Role, detach bool, pod string
 		RoleName:        role.Name,
 		SessionDir:      sessionDir,
 		ClaudeConfigDir: claudeConfigDir,
+		Instructions:    role.Instructions,
 		Heartbeat:       heartbeat,
 		CWD:             agentCWD,
 		Pod:             pod,
