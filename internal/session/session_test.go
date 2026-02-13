@@ -603,3 +603,151 @@ func TestChildArgs_InstructionsDoNotMutateOriginalArgs(t *testing.T) {
 		t.Fatalf("childArgs with instructions mutated original slice: %v", original)
 	}
 }
+
+func TestChildArgs_SystemPrompt(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.SystemPrompt = "You are a custom agent."
+
+	args := s.childArgs()
+
+	// --session-id, <uuid>, --system-prompt, <prompt>
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--system-prompt" || args[3] != "You are a custom agent." {
+		t.Fatalf("expected --system-prompt flag, got %v", args[2:])
+	}
+}
+
+func TestChildArgs_SystemPromptAndInstructions(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.SystemPrompt = "Custom system prompt"
+	s.Instructions = "Additional instructions"
+
+	args := s.childArgs()
+
+	// --session-id, <uuid>, --system-prompt, <prompt>, --append-system-prompt, <instructions>
+	if len(args) != 6 {
+		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--system-prompt" || args[3] != "Custom system prompt" {
+		t.Fatalf("expected --system-prompt, got %v", args[2:4])
+	}
+	if args[4] != "--append-system-prompt" || args[5] != "Additional instructions" {
+		t.Fatalf("expected --append-system-prompt, got %v", args[4:6])
+	}
+}
+
+func TestChildArgs_Model(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.Model = "claude-sonnet-4-5-20250929"
+
+	args := s.childArgs()
+
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--model" || args[3] != "claude-sonnet-4-5-20250929" {
+		t.Fatalf("expected --model flag, got %v", args[2:])
+	}
+}
+
+func TestChildArgs_PermissionMode(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.PermissionMode = "bypassPermissions"
+
+	args := s.childArgs()
+
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--permission-mode" || args[3] != "bypassPermissions" {
+		t.Fatalf("expected --permission-mode flag, got %v", args[2:])
+	}
+}
+
+func TestChildArgs_AllowedTools(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.AllowedTools = []string{"Bash", "Read", "Write"}
+
+	args := s.childArgs()
+
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--allowedTools" || args[3] != "Bash,Read,Write" {
+		t.Fatalf("expected --allowedTools comma-joined, got %v", args[2:])
+	}
+}
+
+func TestChildArgs_DisallowedTools(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.DisallowedTools = []string{"Bash", "Edit"}
+
+	args := s.childArgs()
+
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	}
+	if args[2] != "--disallowedTools" || args[3] != "Bash,Edit" {
+		t.Fatalf("expected --disallowedTools comma-joined, got %v", args[2:])
+	}
+}
+
+func TestChildArgs_EmptyToolListsOmitted(t *testing.T) {
+	s := New("test", "claude", nil)
+	s.SessionID = "test-uuid"
+	s.AllowedTools = []string{}
+	s.DisallowedTools = nil
+
+	args := s.childArgs()
+
+	// Should only have --session-id, <uuid>
+	if len(args) != 2 {
+		t.Fatalf("expected 2 args, got %d: %v", len(args), args)
+	}
+	for _, arg := range args {
+		if arg == "--allowedTools" || arg == "--disallowedTools" {
+			t.Fatalf("tool flags should not be present for empty lists, found %q", arg)
+		}
+	}
+}
+
+func TestChildArgs_AllFieldsCombined(t *testing.T) {
+	s := New("test", "claude", []string{"--verbose"})
+	s.SessionID = "test-uuid"
+	s.SystemPrompt = "Custom prompt"
+	s.Instructions = "Extra instructions"
+	s.Model = "claude-opus-4-6"
+	s.PermissionMode = "plan"
+	s.AllowedTools = []string{"Bash", "Read"}
+	s.DisallowedTools = []string{"Write"}
+
+	args := s.childArgs()
+
+	// --session-id, <uuid>, --verbose, --system-prompt, <p>, --append-system-prompt, <i>,
+	// --model, <m>, --permission-mode, <pm>, --allowedTools, <at>, --disallowedTools, <dt>
+	expected := []string{
+		"--session-id", "test-uuid", "--verbose",
+		"--system-prompt", "Custom prompt",
+		"--append-system-prompt", "Extra instructions",
+		"--model", "claude-opus-4-6",
+		"--permission-mode", "plan",
+		"--allowedTools", "Bash,Read",
+		"--disallowedTools", "Write",
+	}
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %v", len(expected), len(args), args)
+	}
+	for i, want := range expected {
+		if args[i] != want {
+			t.Fatalf("args[%d] = %q, want %q\nfull args: %v", i, args[i], want, args)
+		}
+	}
+}

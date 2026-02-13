@@ -19,6 +19,11 @@ func newDaemonCmd() *cobra.Command {
 	var sessionDir string
 	var claudeConfigDir string
 	var instructions string
+	var systemPrompt string
+	var model string
+	var permissionMode string
+	var allowedTools []string
+	var disallowedTools []string
 	var heartbeatIdleTimeout string
 	var heartbeatMessage string
 	var heartbeatCondition string
@@ -66,6 +71,11 @@ func newDaemonCmd() *cobra.Command {
 				SessionDir:      sessionDir,
 				ClaudeConfigDir: claudeConfigDir,
 				Instructions:    instructions,
+				SystemPrompt:    systemPrompt,
+				Model:           model,
+				PermissionMode:  permissionMode,
+				AllowedTools:    allowedTools,
+				DisallowedTools: disallowedTools,
 				Heartbeat:       heartbeat,
 				Overrides:       overrideMap,
 			})
@@ -85,6 +95,11 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sessionDir, "session-dir", "", "Session directory path")
 	cmd.Flags().StringVar(&claudeConfigDir, "claude-config-dir", "", "Claude config directory")
 	cmd.Flags().StringVar(&instructions, "instructions", "", "Role instructions to pass via --append-system-prompt")
+	cmd.Flags().StringVar(&systemPrompt, "system-prompt", "", "System prompt to pass via --system-prompt")
+	cmd.Flags().StringVar(&model, "model", "", "Model selection to pass via --model")
+	cmd.Flags().StringVar(&permissionMode, "permission-mode", "", "Permission mode to pass via --permission-mode")
+	cmd.Flags().StringArrayVar(&allowedTools, "allowed-tool", nil, "Allowed tool (repeatable)")
+	cmd.Flags().StringArrayVar(&disallowedTools, "disallowed-tool", nil, "Disallowed tool (repeatable)")
 	cmd.Flags().StringVar(&heartbeatIdleTimeout, "heartbeat-idle-timeout", "", "Heartbeat idle timeout duration")
 	cmd.Flags().StringVar(&heartbeatMessage, "heartbeat-message", "", "Heartbeat nudge message")
 	cmd.Flags().StringVar(&heartbeatCondition, "heartbeat-condition", "", "Heartbeat condition command")

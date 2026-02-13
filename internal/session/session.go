@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +31,12 @@ type Session struct {
 	RoleName       string // Role name, if launched with --role
 	SessionDir     string // Session directory path (~/.h2/sessions/<name>/)
 	ClaudeConfigDir string // Shared Claude config dir (used as CLAUDE_CONFIG_DIR)
-	Instructions   string // Role instructions, passed via --append-system-prompt
+	Instructions    string   // Role instructions, passed via --append-system-prompt
+	SystemPrompt    string   // Replaces default system prompt, passed via --system-prompt
+	Model           string   // Model selection, passed via --model
+	PermissionMode  string   // Permission mode, passed via --permission-mode
+	AllowedTools    []string // Allowed tools, passed via --allowedTools (comma-joined)
+	DisallowedTools []string // Disallowed tools, passed via --disallowedTools (comma-joined)
 	Queue      *message.MessageQueue
 	AgentName  string
 	Agent      *agent.Agent
@@ -118,8 +124,7 @@ func (s *Session) initVT(rows, cols int) {
 }
 
 // childArgs returns the command args, prepending any agent-type-specific args
-// (e.g. --session-id for Claude Code) and appending --append-system-prompt
-// when role instructions are present.
+// (e.g. --session-id for Claude Code) and appending role-derived Claude CLI flags.
 func (s *Session) childArgs() []string {
 	prepend := s.Agent.PrependArgs(s.SessionID)
 	var args []string
@@ -128,8 +133,23 @@ func (s *Session) childArgs() []string {
 	} else {
 		args = s.Args
 	}
+	if s.SystemPrompt != "" {
+		args = append(args, "--system-prompt", s.SystemPrompt)
+	}
 	if s.Instructions != "" {
 		args = append(args, "--append-system-prompt", s.Instructions)
+	}
+	if s.Model != "" {
+		args = append(args, "--model", s.Model)
+	}
+	if s.PermissionMode != "" {
+		args = append(args, "--permission-mode", s.PermissionMode)
+	}
+	if len(s.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(s.AllowedTools, ","))
+	}
+	if len(s.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(s.DisallowedTools, ","))
 	}
 	return args
 }
