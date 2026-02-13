@@ -692,6 +692,134 @@ agents:
 	}
 }
 
+// --- h2 run --dry-run end-to-end tests ---
+
+func TestRunDryRun_WithVarFlags(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	// Create a role with template variables in instructions.
+	roleContent := `name: configurable
+instructions: |
+  You are working on the {{ .Var.project }} project.
+  Environment: {{ .Var.env }}
+`
+	os.WriteFile(filepath.Join(h2Root, "roles", "configurable.yaml"), []byte(roleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newRunCmd()
+		cmd.SetArgs([]string{"--dry-run", "--role", "configurable", "--name", "test-agent", "--var", "project=h2", "--var", "env=staging"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	checks := []string{
+		"Agent: test-agent",
+		"Role: configurable",
+		"h2 project",     // template var resolved in instructions
+		"Environment: staging", // template var resolved in instructions
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
+func TestRunDryRun_WithOverride(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	roleContent := "name: overridable\nmodel: haiku\ninstructions: |\n  Test.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "overridable.yaml"), []byte(roleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newRunCmd()
+		cmd.SetArgs([]string{"--dry-run", "--role", "overridable", "--name", "test-agent", "--override", "model=opus"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	checks := []string{
+		"Agent: test-agent",
+		"Model: opus",      // overridden
+		"Overrides: model=opus",
+	}
+	for _, check := range checks {
+		if !strings.Contains(output, check) {
+			t.Errorf("output should contain %q, got:\n%s", check, output)
+		}
+	}
+}
+
+func TestRunDryRun_WithPodEnvVars(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	roleContent := "name: default\ninstructions: |\n  Work.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	output := captureStdout(func() {
+		cmd := newRunCmd()
+		cmd.SetArgs([]string{"--dry-run", "--role", "default", "--name", "test-agent", "--pod", "my-pod"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "H2_POD=my-pod") {
+		t.Errorf("output should contain H2_POD=my-pod, got:\n%s", output)
+	}
+}
+
+func TestRunDryRun_NoSideEffects(t *testing.T) {
+	h2Root := setupPodTestEnv(t)
+
+	roleContent := "name: default\ninstructions: |\n  Work.\n"
+	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
+
+	// Record state before dry-run.
+	sessionsDir := filepath.Join(h2Root, "sessions")
+	entriesBefore, _ := os.ReadDir(sessionsDir)
+
+	_ = captureStdout(func() {
+		cmd := newRunCmd()
+		cmd.SetArgs([]string{"--dry-run", "--role", "default", "--name", "no-side-effects"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// Verify no session directory was created.
+	entriesAfter, _ := os.ReadDir(sessionsDir)
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Errorf("dry-run created session dir entries: before=%d, after=%d", len(entriesBefore), len(entriesAfter))
+	}
+
+	// Verify no socket was created.
+	socketsDir := filepath.Join(h2Root, "sockets")
+	socketEntries, _ := os.ReadDir(socketsDir)
+	for _, entry := range socketEntries {
+		if strings.Contains(entry.Name(), "no-side-effects") {
+			t.Errorf("dry-run created a socket file: %s", entry.Name())
+		}
+	}
+}
+
+func TestRunDryRun_RequiresRole(t *testing.T) {
+	setupPodTestEnv(t)
+
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"--dry-run", "--agent-type", "claude"})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error when using --dry-run without a role")
+	}
+	if !strings.Contains(err.Error(), "--dry-run requires a role") {
+		t.Errorf("expected error about --dry-run requiring a role, got: %v", err)
+	}
+}
+
 // capturePrintDryRun captures stdout from printDryRun.
 func capturePrintDryRun(rc *ResolvedAgentConfig) string {
 	return captureStdout(func() {
