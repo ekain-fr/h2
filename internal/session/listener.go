@@ -118,10 +118,16 @@ func (d *Daemon) handleStop(conn net.Conn) {
 	defer conn.Close()
 	message.SendResponse(conn, &message.Response{OK: true})
 
-	// Trigger graceful shutdown: set Quit so lifecycleLoop exits after Wait().
+	// Trigger graceful shutdown: set Quit so lifecycleLoop exits.
 	s := d.Session
 	s.Quit = true
 	s.VT.KillChild()
+	// Signal quitCh so lifecycleLoop unblocks if the child already exited
+	// and the loop is waiting in the relaunch/quit select.
+	select {
+	case s.quitCh <- struct{}{}:
+	default:
+	}
 }
 
 func (d *Daemon) handleHookEvent(conn net.Conn, req *message.Request) {
