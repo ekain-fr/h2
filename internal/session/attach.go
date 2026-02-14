@@ -44,10 +44,14 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	vt.Mu.Lock()
 	cl.Output = &frameWriter{conn: conn}
 
-	// Resize PTY to client's terminal size.
+	// Resize PTY to client's terminal size, but only if dimensions actually
+	// changed. Unnecessary resizes send SIGWINCH to the child, which can
+	// cause a screen clear + redraw race that produces a blank screen.
 	if req.Cols > 0 && req.Rows > 0 {
 		childRows := req.Rows - cl.ReservedRows()
-		vt.Resize(req.Rows, req.Cols, childRows)
+		if req.Rows != vt.Rows || req.Cols != vt.Cols || childRows != vt.ChildRows {
+			vt.Resize(req.Rows, req.Cols, childRows)
+		}
 	}
 
 	// Set detach callback to close the client connection.
