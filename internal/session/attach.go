@@ -57,8 +57,9 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	// Set detach callback to close the client connection.
 	cl.OnDetach = func() { conn.Close() }
 
-	// Send full screen redraw and enable mouse reporting.
-	cl.Output.Write([]byte("\033[2J\033[H"))
+	// Enable mouse reporting and render the current screen.
+	// RenderScreen clears each line individually (\033[2K), so a full
+	// screen clear (\033[2J) is unnecessary and would cause a visible flash.
 	cl.Output.Write([]byte("\033[?1000h\033[?1006h"))
 	cl.RenderScreen()
 	cl.RenderBar()
