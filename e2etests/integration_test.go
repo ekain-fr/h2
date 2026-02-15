@@ -118,18 +118,19 @@ agents:
 		t.Errorf("h2 pod stop failed: exit=%d stderr=%s", stopResult.ExitCode, stopResult.Stderr)
 	}
 
-	// Verify agents are gone or in exited state.
+	// Verify agents are gone, exited, or not responding (socket cleanup race).
 	listAfter := runH2(t, h2Dir, "list")
 	if listAfter.ExitCode != 0 {
 		t.Fatalf("h2 list (after stop) failed: exit=%d stderr=%s", listAfter.ExitCode, listAfter.Stderr)
 	}
-	// Agents may still appear briefly as "Exited" before socket cleanup.
-	// Both "gone" and "Exited" are acceptable per the verification doc.
-	if strings.Contains(listAfter.Stdout, "builder") && !strings.Contains(listAfter.Stdout, "Exited") {
-		t.Errorf("builder still running after pod stop: %s", listAfter.Stdout)
-	}
-	if strings.Contains(listAfter.Stdout, "reviewer") && !strings.Contains(listAfter.Stdout, "Exited") {
-		t.Errorf("reviewer still running after pod stop: %s", listAfter.Stdout)
+	// After pod stop, agents may briefly appear as "Exited" or "not responding"
+	// (daemon dead but socket not yet cleaned up). All three states are acceptable.
+	for _, name := range []string{"builder", "reviewer"} {
+		if strings.Contains(listAfter.Stdout, name) &&
+			!strings.Contains(listAfter.Stdout, "Exited") &&
+			!strings.Contains(listAfter.Stdout, "not responding") {
+			t.Errorf("%s still running after pod stop: %s", name, listAfter.Stdout)
+		}
 	}
 
 	// 9. Check version matches marker file.

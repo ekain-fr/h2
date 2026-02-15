@@ -321,13 +321,13 @@ plans_dir: plans/
 		if !strings.Contains(args, "bypassPermissions") {
 			t.Errorf("call %d missing bypassPermissions: %v", i, call)
 		}
-		if strings.Contains(args, "--verbose") {
-			t.Errorf("call %d should not have --verbose when verbose=false: %v", i, call)
+		if strings.Contains(args, "stream-json") {
+			t.Errorf("call %d should not have stream-json when verbose=false: %v", i, call)
 		}
 	}
 }
 
-func TestRunQAAll_VerbosePassesFlag(t *testing.T) {
+func TestRunQAAll_VerbosePassesStreamJSON(t *testing.T) {
 	orig := execCommand
 	var claudeCalls [][]string
 	execCommand = func(name string, arg ...string) *exec.Cmd {
@@ -360,7 +360,39 @@ plans_dir: plans/
 	}
 
 	args := strings.Join(claudeCalls[0], " ")
-	if !strings.Contains(args, "--verbose") {
-		t.Errorf("expected --verbose in claude args: %v", claudeCalls[0])
+	if !strings.Contains(args, "--output-format") || !strings.Contains(args, "stream-json") {
+		t.Errorf("expected --output-format stream-json in claude args: %v", claudeCalls[0])
+	}
+}
+
+func TestStreamVerboseOutput(t *testing.T) {
+	// Simulate claude stream-json output.
+	input := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Running test case 1..."}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cd /tmp && pytest tests/"}}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"description":"Fix the bug"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Test case 1 passed."}]}}`,
+	}, "\n")
+
+	var buf strings.Builder
+	streamVerboseOutput(strings.NewReader(input), &buf)
+	out := buf.String()
+
+	if !strings.Contains(out, "Running test case 1...") {
+		t.Errorf("should contain text output, got: %s", out)
+	}
+	if !strings.Contains(out, "→ Bash: cd /tmp && pytest tests/") {
+		t.Errorf("should contain Bash tool call, got: %s", out)
+	}
+	if !strings.Contains(out, "→ Edit: Fix the bug") {
+		t.Errorf("should contain Edit tool call with description, got: %s", out)
+	}
+	if !strings.Contains(out, "Test case 1 passed.") {
+		t.Errorf("should contain final text, got: %s", out)
+	}
+	if strings.Contains(out, "system") || strings.Contains(out, "tool_result") {
+		t.Errorf("should not contain non-assistant events, got: %s", out)
 	}
 }

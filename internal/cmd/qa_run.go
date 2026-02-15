@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,14 +150,12 @@ func runQADocker(cfg *QAConfig, planName string, planContent string, verbose boo
 		"--model", cfg.Orchestrator.Model,
 	}
 	if verbose {
-		claudeArgs = append(claudeArgs, "--verbose")
+		claudeArgs = append(claudeArgs, "--verbose", "--output-format", "stream-json")
 	}
 	claudeArgs = append(claudeArgs, "Execute the test plan in your instructions. Write results to ~/results/report.md and ~/results/metadata.json.")
 	execCmd := exec.Command("docker", claudeArgs...)
-	execCmd.Stdout = os.Stdout
-	execCmd.Stderr = os.Stderr
 
-	execErr := execCmd.Run()
+	execErr := runClaudeCmd(execCmd, verbose)
 
 	// Update latest symlink.
 	updateLatestSymlink(cfg, resultsDir)
@@ -211,15 +212,13 @@ func runQANoDocker(cfg *QAConfig, planName string, planContent string, verbose b
 		"--model", cfg.Orchestrator.Model,
 	}
 	if verbose {
-		claudeArgs = append(claudeArgs, "--verbose")
+		claudeArgs = append(claudeArgs, "--verbose", "--output-format", "stream-json")
 	}
 	claudeArgs = append(claudeArgs, "Execute the test plan in your instructions. Write results to "+resultsDir+"/report.md and "+resultsDir+"/metadata.json.")
 	cmd := execCommand("claude", claudeArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.Env = append(filteredEnv("CLAUDECODE", "H2_QA_INTEGRATION"), "H2_DIR="+tmpDir)
 
-	execErr := cmd.Run()
+	execErr := runClaudeCmd(cmd, verbose)
 
 	updateLatestSymlink(cfg, resultsDir)
 
@@ -352,6 +351,82 @@ func buildEnvArgs(cfg *QAConfig) []string {
 		}
 	}
 	return args
+}
+
+// runClaudeCmd executes a claude command. When verbose, it pipes stdout through
+// a stream-json parser that prints human-readable progress. Otherwise it pipes
+// stdout/stderr directly to os.Stdout/os.Stderr.
+func runClaudeCmd(cmd *exec.Cmd, verbose bool) error {
+	cmd.Stderr = os.Stderr
+
+	if !verbose {
+		cmd.Stdout = os.Stdout
+		return cmd.Run()
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start claude: %w", err)
+	}
+
+	streamVerboseOutput(stdout, os.Stderr)
+	return cmd.Wait()
+}
+
+// streamVerboseOutput reads claude's stream-json output and prints
+// human-readable progress lines showing tool calls and text output.
+func streamVerboseOutput(r io.Reader, w io.Writer) {
+	scanner := bufio.NewScanner(r)
+	// Stream-json lines can be large (file contents in tool results).
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	for scanner.Scan() {
+		var event struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content []struct {
+					Type  string                 `json:"type"`
+					Text  string                 `json:"text,omitempty"`
+					Name  string                 `json:"name,omitempty"`
+					Input map[string]interface{} `json:"input,omitempty"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+
+		if event.Type != "assistant" {
+			continue
+		}
+
+		for _, block := range event.Message.Content {
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					fmt.Fprint(w, block.Text)
+				}
+			case "tool_use":
+				summary := block.Name
+				if cmd, ok := block.Input["command"].(string); ok {
+					cmd = strings.TrimSpace(cmd)
+					if len(cmd) > 120 {
+						cmd = cmd[:117] + "..."
+					}
+					summary += ": " + cmd
+				} else if desc, ok := block.Input["description"].(string); ok {
+					summary += ": " + desc
+				}
+				fmt.Fprintf(w, "\n→ %s\n", summary)
+			}
+		}
+	}
+	fmt.Fprintln(w) // final newline
 }
 
 // filteredEnv returns os.Environ() with the specified keys removed.
