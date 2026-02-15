@@ -80,9 +80,20 @@ func ListPodRoles() ([]*Role, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}
-		role, err := LoadRoleFrom(filepath.Join(dir, entry.Name()))
+		path := filepath.Join(dir, entry.Name())
+		roleName := strings.TrimSuffix(entry.Name(), ".yaml")
+		// Try rendered load first (handles template files like role init generates).
+		ctx := &tmpl.Context{
+			RoleName: roleName,
+			H2Dir:    ConfigDir(),
+		}
+		role, err := LoadRoleRenderedFrom(path, ctx)
 		if err != nil {
-			continue
+			// Fallback to plain load (handles roles with required vars).
+			role, err = LoadRoleFrom(path)
+			if err != nil {
+				continue
+			}
 		}
 		roles = append(roles, role)
 	}

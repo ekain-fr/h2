@@ -650,6 +650,28 @@ func TestValidate_WorktreeMissingName(t *testing.T) {
 	}
 }
 
+func TestLoadRoleFrom_QuotedTemplateValues(t *testing.T) {
+	// Quoted {{ }} values should be valid YAML and parse correctly.
+	yaml := `
+name: "{{ .RoleName }}"
+claude_config_dir: "{{ .H2Dir }}/claude-config/default"
+instructions: |
+  You are a {{ .RoleName }} agent.
+`
+	path := writeTempFile(t, "quoted.yaml", yaml)
+
+	role, err := LoadRoleFrom(path)
+	if err != nil {
+		t.Fatalf("LoadRoleFrom: %v", err)
+	}
+	if role.Name != "{{ .RoleName }}" {
+		t.Errorf("Name = %q, want %q", role.Name, "{{ .RoleName }}")
+	}
+	if role.ClaudeConfigDir != "{{ .H2Dir }}/claude-config/default" {
+		t.Errorf("ClaudeConfigDir = %q, want %q", role.ClaudeConfigDir, "{{ .H2Dir }}/claude-config/default")
+	}
+}
+
 // --- LoadRoleRendered tests ---
 
 func TestLoadRoleRenderedFrom_BasicRendering(t *testing.T) {

@@ -40,8 +40,9 @@ func TestRoleTemplate_ValidGoTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("roleTemplate(%q): Render failed: %v", name, err)
 		}
-		if !strings.Contains(rendered, "name: "+name) {
-			t.Errorf("roleTemplate(%q): rendered should contain 'name: %s'", name, name)
+		// Name may be quoted in the YAML template: name: "default"
+		if !strings.Contains(rendered, name) {
+			t.Errorf("roleTemplate(%q): rendered should contain '%s'", name, name)
 		}
 		if !strings.Contains(rendered, "/tmp/test-h2/claude-config/default") {
 			t.Errorf("roleTemplate(%q): rendered should contain resolved claude_config_dir", name)
@@ -169,6 +170,35 @@ func TestRoleInitCmd_RefusesOverwrite(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when role already exists")
+	}
+}
+
+func TestRoleInitThenList_ShowsRole(t *testing.T) {
+	setupRoleTestH2Dir(t)
+
+	cmd := newRoleInitCmd()
+	cmd.SetArgs([]string{"default"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("role init failed: %v", err)
+	}
+
+	roles, err := config.ListRoles()
+	if err != nil {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	if len(roles) == 0 {
+		t.Fatal("expected at least one role, got none")
+	}
+
+	found := false
+	for _, r := range roles {
+		if r.Name == "default" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected role named 'default' in list, got: %v", roles)
 	}
 }
 

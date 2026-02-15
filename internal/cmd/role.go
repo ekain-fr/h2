@@ -155,7 +155,7 @@ func roleTemplate(name string) string {
 }
 
 func defaultRoleTemplate() string {
-	return `name: {{ .RoleName }}
+	return `name: "{{ .RoleName }}"
 description: "A {{ .RoleName }} agent for h2"
 
 # Agent type (currently only "claude" is supported)
@@ -177,7 +177,7 @@ model: opus
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.
 # Set to ~/ to use the system default (no override).
-claude_config_dir: {{ .H2Dir }}/claude-config/default
+claude_config_dir: "{{ .H2Dir }}/claude-config/default"
 
 instructions: |
   You are a {{ .RoleName }} agent running in h2, a terminal multiplexer with inter-agent messaging.
@@ -252,7 +252,7 @@ permissions:
 }
 
 func conciergeRoleTemplate() string {
-	return `name: {{ .RoleName }}
+	return `name: "{{ .RoleName }}"
 description: "The concierge agent — your primary interface in h2"
 
 # Agent type (currently only "claude" is supported)
@@ -274,7 +274,7 @@ model: opus
 # Claude config directory (for custom settings files, hooks, or auth)
 # You can create separate configs for roles with different requirements.
 # Set to ~/ to use the system default (no override).
-claude_config_dir: {{ .H2Dir }}/claude-config/default
+claude_config_dir: "{{ .H2Dir }}/claude-config/default"
 
 instructions: |
   You are the concierge — the primary agent the user interacts with in h2.
