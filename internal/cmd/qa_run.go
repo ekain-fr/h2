@@ -11,6 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// execCommand is the function used to create exec.Cmd instances.
+// Tests override this to avoid spawning real processes.
+var execCommand = exec.Command
+
 func newQARunCmd() *cobra.Command {
 	var configPath string
 	var all bool
@@ -176,7 +180,7 @@ func runQANoDocker(cfg *QAConfig, planName string, planContent string) error {
 	}
 
 	// Initialize h2 in temp dir via h2 init.
-	initCmd := exec.Command("h2", "init", tmpDir)
+	initCmd := execCommand("h2", "init", tmpDir)
 	initCmd.Env = append(os.Environ(), "H2_DIR="+tmpDir)
 	if err := initCmd.Run(); err != nil {
 		// Fallback: manually create minimal directory structure.
@@ -193,7 +197,7 @@ func runQANoDocker(cfg *QAConfig, planName string, planContent string) error {
 	fmt.Fprintf(os.Stderr, "Launching QA orchestrator (model: %s, plan: %s)...\n\n", cfg.Orchestrator.Model, planName)
 
 	// Run claude with --system-prompt (plain text instructions).
-	cmd := exec.Command("claude",
+	cmd := execCommand("claude",
 		"--system-prompt", instructions,
 		"--permission-mode", "bypassPermissions",
 		"--model", cfg.Orchestrator.Model,
@@ -201,7 +205,7 @@ func runQANoDocker(cfg *QAConfig, planName string, planContent string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(filteredEnv("CLAUDECODE"), "H2_DIR="+tmpDir)
+	cmd.Env = append(filteredEnv("CLAUDECODE", "H2_QA_INTEGRATION"), "H2_DIR="+tmpDir)
 
 	execErr := cmd.Run()
 

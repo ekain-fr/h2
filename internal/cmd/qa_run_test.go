@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,6 +275,17 @@ plans_dir: plans/
 }
 
 func TestRunQAAll_DiscoverAndRun(t *testing.T) {
+	// Mock execCommand so no real processes are spawned.
+	orig := execCommand
+	var claudeCalls [][]string
+	execCommand = func(name string, arg ...string) *exec.Cmd {
+		if name == "claude" {
+			claudeCalls = append(claudeCalls, append([]string{name}, arg...))
+		}
+		return exec.Command("true")
+	}
+	t.Cleanup(func() { execCommand = orig })
+
 	dir := t.TempDir()
 	plansDir := filepath.Join(dir, "plans")
 	os.MkdirAll(plansDir, 0o755)
@@ -287,19 +299,24 @@ sandbox:
 plans_dir: plans/
 `), 0o644)
 
-	// --all with no-docker mode — will fail because claude isn't available,
-	// but we verify it discovers both plans by checking the error messages.
 	err := runQAAll(configPath, true)
-	if err == nil {
-		t.Skip("claude available in test env, skipping error check")
+	if err != nil {
+		t.Fatalf("runQAAll: %v", err)
 	}
-	// Should have attempted both plans.
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "plan-a") || !strings.Contains(errMsg, "plan-b") {
-		// The error might be from the first plan failing.
-		// Just verify it doesn't say "no test plans found".
-		if strings.Contains(errMsg, "no test plans found") {
-			t.Error("should have discovered plans")
+
+	// Should have invoked claude once per plan.
+	if len(claudeCalls) != 2 {
+		t.Fatalf("expected 2 claude invocations, got %d", len(claudeCalls))
+	}
+
+	// Verify both calls include --system-prompt and bypassPermissions.
+	for i, call := range claudeCalls {
+		args := strings.Join(call, " ")
+		if !strings.Contains(args, "--system-prompt") {
+			t.Errorf("call %d missing --system-prompt: %v", i, call)
+		}
+		if !strings.Contains(args, "bypassPermissions") {
+			t.Errorf("call %d missing bypassPermissions: %v", i, call)
 		}
 	}
 }
