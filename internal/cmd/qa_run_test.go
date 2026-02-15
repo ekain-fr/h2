@@ -309,9 +309,12 @@ plans_dir: plans/
 		t.Fatalf("expected 2 claude invocations, got %d", len(claudeCalls))
 	}
 
-	// Verify both calls include --system-prompt and bypassPermissions.
+	// Verify both calls use --print (non-interactive) with --system-prompt and bypassPermissions.
 	for i, call := range claudeCalls {
 		args := strings.Join(call, " ")
+		if !strings.Contains(args, "--print") {
+			t.Errorf("call %d missing --print: %v", i, call)
+		}
 		if !strings.Contains(args, "--system-prompt") {
 			t.Errorf("call %d missing --system-prompt: %v", i, call)
 		}

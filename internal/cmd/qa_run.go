@@ -134,15 +134,13 @@ func runQADocker(cfg *QAConfig, planName string, planContent string) error {
 	// Create evidence directory inside container.
 	dockerExec("exec", containerName, "mkdir", "-p", "/root/results/evidence")
 
-	// Launch the orchestrator agent and attach terminal.
+	// Launch the orchestrator agent in non-interactive mode.
 	fmt.Fprintf(os.Stderr, "Launching QA orchestrator (model: %s, plan: %s)...\n\n", cfg.Orchestrator.Model, planName)
 
-	// Use docker exec -it to run claude with --system-prompt (plain text instructions).
-	execCmd := exec.Command("docker", "exec", "-it", containerName,
-		"claude", "--system-prompt", instructions, "--permission-mode", "bypassPermissions",
+	execCmd := exec.Command("docker", "exec", containerName,
+		"claude", "--print", "--system-prompt", instructions, "--permission-mode", "bypassPermissions",
 		"--model", cfg.Orchestrator.Model,
 		"Execute the test plan in your instructions. Write results to ~/results/report.md and ~/results/metadata.json.")
-	execCmd.Stdin = os.Stdin
 	execCmd.Stdout = os.Stdout
 	execCmd.Stderr = os.Stderr
 
@@ -196,13 +194,12 @@ func runQANoDocker(cfg *QAConfig, planName string, planContent string) error {
 	fmt.Fprintf(os.Stderr, "Running QA without Docker (H2_DIR=%s)...\n", tmpDir)
 	fmt.Fprintf(os.Stderr, "Launching QA orchestrator (model: %s, plan: %s)...\n\n", cfg.Orchestrator.Model, planName)
 
-	// Run claude with --system-prompt (plain text instructions).
-	cmd := execCommand("claude",
+	// Run claude in non-interactive mode (--print exits after completing the task).
+	cmd := execCommand("claude", "--print",
 		"--system-prompt", instructions,
 		"--permission-mode", "bypassPermissions",
 		"--model", cfg.Orchestrator.Model,
 		"Execute the test plan in your instructions. Write results to "+resultsDir+"/report.md and "+resultsDir+"/metadata.json.")
-	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(filteredEnv("CLAUDECODE", "H2_QA_INTEGRATION"), "H2_DIR="+tmpDir)
