@@ -9,10 +9,35 @@ import (
 	"github.com/vito/midterm"
 
 	"h2/internal/session/agent"
+	"h2/internal/session/agent/collector"
 	"h2/internal/session/client"
 	"h2/internal/session/message"
 	"h2/internal/session/virtualterminal"
 )
+
+func setFastIdle(t *testing.T) {
+	t.Helper()
+	old := collector.IdleThreshold
+	collector.IdleThreshold = 10 * time.Millisecond
+	t.Cleanup(func() { collector.IdleThreshold = old })
+}
+
+// waitForState polls StateChanged until the target state is reached.
+func waitForState(t *testing.T, s *Session, target agent.State, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		if got, _ := s.State(); got == target {
+			return
+		}
+		select {
+		case <-s.StateChanged():
+		case <-deadline:
+			got, _ := s.State()
+			t.Fatalf("timed out waiting for %v, got %v", target, got)
+		}
+	}
+}
 
 // startWatchState starts the Agent's watchState goroutine via StartCollectors.
 // For GenericType agents (command != "claude"), this starts watchState without
@@ -25,6 +50,7 @@ func startWatchState(t *testing.T, s *Session) {
 }
 
 func TestStateTransitions_ActiveToIdle(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
@@ -32,39 +58,30 @@ func TestStateTransitions_ActiveToIdle(t *testing.T) {
 
 	// Signal output to ensure we start Active.
 	s.NoteOutput()
-	time.Sleep(50 * time.Millisecond)
-	if got, _ := s.State(); got != agent.StateActive {
-		t.Fatalf("expected StateActive, got %v", got)
-	}
+	// Wait for state to become active via channel (not sleep, which risks overshooting the threshold).
+	waitForState(t, s, agent.StateActive, 2*time.Second)
 
 	// Wait for idle threshold to pass.
-	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got, _ := s.State(); got != agent.StateIdle {
-		t.Fatalf("expected StateIdle after threshold, got %v", got)
-	}
+	waitForState(t, s, agent.StateIdle, 2*time.Second)
 }
 
 func TestStateTransitions_IdleToActive(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
 	startWatchState(t, s)
 
 	// Let it go idle.
-	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got, _ := s.State(); got != agent.StateIdle {
-		t.Fatalf("expected StateIdle, got %v", got)
-	}
+	waitForState(t, s, agent.StateIdle, 2*time.Second)
 
 	// Signal output — should go back to Active.
 	s.NoteOutput()
-	time.Sleep(50 * time.Millisecond)
-	if got, _ := s.State(); got != agent.StateActive {
-		t.Fatalf("expected StateActive after output, got %v", got)
-	}
+	waitForState(t, s, agent.StateActive, 2*time.Second)
 }
 
 func TestStateTransitions_Exited(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
@@ -85,6 +102,7 @@ func TestStateTransitions_Exited(t *testing.T) {
 }
 
 func TestWaitForState_ReachesTarget(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
@@ -95,7 +113,7 @@ func TestWaitForState_ReachesTarget(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		done <- s.WaitForState(ctx, agent.StateIdle)
 	}()
@@ -108,6 +126,7 @@ func TestWaitForState_ReachesTarget(t *testing.T) {
 }
 
 func TestWaitForState_ContextCancelled(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
@@ -116,7 +135,7 @@ func TestWaitForState_ContextCancelled(t *testing.T) {
 	// Keep sending output so it never goes idle.
 	stopOutput := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(2 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -129,7 +148,7 @@ func TestWaitForState_ContextCancelled(t *testing.T) {
 	}()
 	defer close(stopOutput)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	result := s.WaitForState(ctx, agent.StateIdle)
@@ -139,6 +158,7 @@ func TestWaitForState_ContextCancelled(t *testing.T) {
 }
 
 func TestStateChanged_ClosesOnTransition(t *testing.T) {
+	setFastIdle(t)
 	s := New("test", "true", nil)
 	defer s.Stop()
 
@@ -150,7 +170,7 @@ func TestStateChanged_ClosesOnTransition(t *testing.T) {
 	select {
 	case <-ch:
 		// Good — channel was closed.
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("StateChanged channel was not closed after state transition")
 	}
 }

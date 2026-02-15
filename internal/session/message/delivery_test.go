@@ -267,6 +267,10 @@ func TestDeliver_InterruptRetry_IdleOnFirst(t *testing.T) {
 }
 
 func TestDeliver_InterruptRetry_TriesThreeTimes(t *testing.T) {
+	old := interruptWaitTimeout
+	interruptWaitTimeout = 1 * time.Millisecond
+	t.Cleanup(func() { interruptWaitTimeout = old })
+
 	var buf threadSafeBuffer
 	q := NewMessageQueue()
 	stop := make(chan struct{})
@@ -304,7 +308,7 @@ func TestDeliver_InterruptRetry_TriesThreeTimes(t *testing.T) {
 
 	select {
 	case <-delivered:
-	case <-time.After(60 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("delivery timed out")
 	}
 	close(stop)

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"h2/internal/session/agent"
+	"h2/internal/session/agent/collector"
 	"h2/internal/session/message"
 )
 
@@ -14,7 +15,15 @@ func newTestAgent() *agent.Agent {
 	return agent.New(agent.ResolveAgentType("generic"))
 }
 
+func setFastIdleHeartbeat(t *testing.T) {
+	t.Helper()
+	old := collector.IdleThreshold
+	collector.IdleThreshold = 10 * time.Millisecond
+	t.Cleanup(func() { collector.IdleThreshold = old })
+}
+
 func TestHeartbeat_NudgeAfterIdleTimeout(t *testing.T) {
+	setFastIdleHeartbeat(t)
 	a := newTestAgent()
 	defer a.Stop()
 	// Start the watchState goroutine so agent can transition to idle.
@@ -31,8 +40,8 @@ func TestHeartbeat_NudgeAfterIdleTimeout(t *testing.T) {
 		Stop:        stop,
 	})
 
-	// Wait for agent to become idle (2s IdleThreshold) + heartbeat timeout (100ms) + buffer.
-	deadline := time.After(5 * time.Second)
+	// Wait for agent to become idle (10ms IdleThreshold) + heartbeat timeout (100ms) + buffer.
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
@@ -63,6 +72,7 @@ func TestHeartbeat_NudgeAfterIdleTimeout(t *testing.T) {
 }
 
 func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
+	setFastIdleHeartbeat(t)
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -79,7 +89,7 @@ func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
 	})
 
 	// Wait for agent to go idle.
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for st, _ := a.State(); st != agent.StateIdle; st, _ = a.State() {
 		select {
 		case <-deadline:
@@ -88,12 +98,26 @@ func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
 		}
 	}
 
-	// While the 500ms timer is running, make the agent active again.
+	// While the 500ms timer is running, make the agent active again and
+	// keep it active by pumping output faster than IdleThreshold.
 	time.Sleep(100 * time.Millisecond)
-	a.NoteOutput() // triggers active state
+	stopOutput := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a.NoteOutput()
+			case <-stopOutput:
+				return
+			}
+		}
+	}()
 
-	// Wait a bit past the original timeout.
+	// Wait past the original heartbeat timeout.
 	time.Sleep(600 * time.Millisecond)
+	close(stopOutput)
 
 	if q.PendingCount() != 0 {
 		t.Error("expected no messages; agent went active before timeout")
@@ -103,6 +127,7 @@ func TestHeartbeat_CancelledWhenAgentGoesActive(t *testing.T) {
 }
 
 func TestHeartbeat_ConditionGates(t *testing.T) {
+	setFastIdleHeartbeat(t)
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -121,7 +146,7 @@ func TestHeartbeat_ConditionGates(t *testing.T) {
 	})
 
 	// Wait for idle + timeout + buffer.
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for st, _ := a.State(); st != agent.StateIdle; st, _ = a.State() {
 		select {
 		case <-deadline:
@@ -131,7 +156,7 @@ func TestHeartbeat_ConditionGates(t *testing.T) {
 	}
 
 	// Wait for the idle timeout to fire and condition to be checked.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	if q.PendingCount() != 0 {
 		t.Error("expected no messages; condition 'false' should gate the nudge")
@@ -141,6 +166,7 @@ func TestHeartbeat_ConditionGates(t *testing.T) {
 }
 
 func TestHeartbeat_ConditionTrue(t *testing.T) {
+	setFastIdleHeartbeat(t)
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()
@@ -158,7 +184,7 @@ func TestHeartbeat_ConditionTrue(t *testing.T) {
 		Stop:        stop,
 	})
 
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
@@ -183,6 +209,7 @@ func TestHeartbeat_ConditionTrue(t *testing.T) {
 }
 
 func TestHeartbeat_StopTerminatesLoop(t *testing.T) {
+	setFastIdleHeartbeat(t)
 	a := newTestAgent()
 	defer a.Stop()
 	a.StartCollectors()

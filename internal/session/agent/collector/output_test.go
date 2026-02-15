@@ -5,7 +5,15 @@ import (
 	"time"
 )
 
+func setFastIdle(t *testing.T) {
+	t.Helper()
+	old := IdleThreshold
+	IdleThreshold = 10 * time.Millisecond
+	t.Cleanup(func() { IdleThreshold = old })
+}
+
 func TestOutputCollector_ActiveOnOutput(t *testing.T) {
+	setFastIdle(t)
 	c := NewOutputCollector()
 	defer c.Stop()
 
@@ -22,6 +30,7 @@ func TestOutputCollector_ActiveOnOutput(t *testing.T) {
 }
 
 func TestOutputCollector_IdleAfterThreshold(t *testing.T) {
+	setFastIdle(t)
 	c := NewOutputCollector()
 	defer c.Stop()
 
@@ -40,6 +49,7 @@ func TestOutputCollector_IdleAfterThreshold(t *testing.T) {
 }
 
 func TestOutputCollector_ResetTimerOnOutput(t *testing.T) {
+	setFastIdle(t)
 	c := NewOutputCollector()
 	defer c.Stop()
 

@@ -33,6 +33,7 @@ type DeliveryConfig struct {
 	NoteInterrupt func()         // called when sending Ctrl+C for interrupt delivery
 	OnDeliver   func()           // called after each delivery (e.g. to render)
 	Stop        <-chan struct{}
+
 }
 
 // PrepareMessage creates a Message, writes its body to disk, and enqueues it.
@@ -92,10 +93,13 @@ func RunDelivery(cfg DeliveryConfig) {
 }
 
 const (
-	interruptRetries       = 3
-	interruptWaitTimeout   = 5 * time.Second
-	maxInlineBodyLen       = 300
+	interruptRetries = 3
+	maxInlineBodyLen = 300
 )
+
+// interruptWaitTimeout is how long to wait for idle after each Ctrl+C.
+// Var so tests can override it.
+var interruptWaitTimeout = 5 * time.Second
 
 func deliver(cfg DeliveryConfig, msg *Message) {
 	if msg.Priority == PriorityInterrupt {

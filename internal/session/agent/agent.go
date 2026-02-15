@@ -25,9 +25,11 @@ const (
 	StateActive      = collector.StateActive
 	StateIdle        = collector.StateIdle
 	StateExited      = collector.StateExited
-
-	IdleThreshold = collector.IdleThreshold
 )
+
+// IdleThreshold re-exports collector.IdleThreshold for convenience.
+// Tests can set collector.IdleThreshold directly to override.
+var IdleThreshold = collector.IdleThreshold
 
 // Re-export SubState type, constants, and StateUpdate from collector package.
 type SubState = collector.SubState

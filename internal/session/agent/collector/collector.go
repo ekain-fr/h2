@@ -3,7 +3,8 @@ package collector
 import "time"
 
 // IdleThreshold is how long without activity before an agent is considered idle.
-const IdleThreshold = 2 * time.Second
+// This is a var so tests can lower it for speed.
+var IdleThreshold = 2 * time.Second
 
 // State represents the derived activity state of an agent.
 type State int

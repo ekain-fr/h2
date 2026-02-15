@@ -14,9 +14,14 @@ import (
 	"h2/internal/bridge"
 )
 
-const (
+var (
+	// initialBackoff is the starting backoff after a poll error.
+	// Var so tests can override it.
 	initialBackoff = 1 * time.Second
-	maxBackoff     = 60 * time.Second
+)
+
+const (
+	maxBackoff = 60 * time.Second
 
 	// maxMessageLen is Telegram's maximum message length.
 	maxMessageLen = 4096

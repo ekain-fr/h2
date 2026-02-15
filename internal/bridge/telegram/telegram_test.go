@@ -720,6 +720,10 @@ func TestPoll_AgentPrefix_NotIntercepted(t *testing.T) {
 }
 
 func TestPoll_ExponentialBackoff(t *testing.T) {
+	old := initialBackoff
+	initialBackoff = 1 * time.Millisecond
+	t.Cleanup(func() { initialBackoff = old })
+
 	var requestCount atomic.Int64
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -741,17 +745,15 @@ func TestPoll_ExponentialBackoff(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// With 1s initial backoff, in 3.5 seconds we should see:
-	//   - request 1 at t=0 (fails, wait 1s)
-	//   - request 2 at t=1 (fails, wait 2s)
-	//   - request 3 at t=3 (fails, wait 4s)
-	// Without backoff we'd see dozens of requests.
-	time.Sleep(3500 * time.Millisecond)
+	// With 1ms initial backoff, in 20ms we should see a handful of requests
+	// (1ms + 2ms + 4ms + 8ms = ~15ms for 4 retries).
+	// Without backoff we'd see hundreds of requests.
+	time.Sleep(20 * time.Millisecond)
 	tg.Stop()
 
 	count := requestCount.Load()
-	if count > 5 {
-		t.Errorf("expected <= 5 requests with backoff, got %d (backoff not working)", count)
+	if count > 8 {
+		t.Errorf("expected <= 8 requests with backoff, got %d (backoff not working)", count)
 	}
 	if count < 2 {
 		t.Errorf("expected >= 2 requests, got %d (polling not running?)", count)
@@ -759,6 +761,10 @@ func TestPoll_ExponentialBackoff(t *testing.T) {
 }
 
 func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
+	old := initialBackoff
+	initialBackoff = 1 * time.Millisecond
+	t.Cleanup(func() { initialBackoff = old })
+
 	var mu sync.Mutex
 	var callTimes []time.Time
 	callCount := 0
@@ -775,16 +781,16 @@ func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
 			// First call: error to trigger backoff
 			w.WriteHeader(http.StatusInternalServerError)
 		case n == 1:
-			// Second call (after 1s backoff): error again to grow backoff to 2s
+			// Second call (after 1ms backoff): error again to grow backoff to 2ms
 			w.WriteHeader(http.StatusInternalServerError)
 		case n == 2:
-			// Third call (after 2s backoff): succeed to reset backoff
+			// Third call (after 2ms backoff): succeed to reset backoff
 			json.NewEncoder(w).Encode(getUpdatesResponse{OK: true})
 		case n == 3:
 			// Fourth call (should be immediate after success): error to trigger backoff
 			w.WriteHeader(http.StatusInternalServerError)
 		case n == 4:
-			// Fifth call: should be after 1s (reset backoff), not 4s
+			// Fifth call: should be after 1ms (reset backoff), not 4ms
 			json.NewEncoder(w).Encode(getUpdatesResponse{OK: true})
 		default:
 			<-r.Context().Done()
@@ -804,8 +810,8 @@ func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Wait for enough calls to verify reset behavior
-	deadline := time.Now().Add(6 * time.Second)
+	// Wait for enough calls to verify reset behavior.
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
 		n := callCount
@@ -813,7 +819,7 @@ func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
 		if n >= 5 {
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)
 	}
 	tg.Stop()
 
@@ -824,9 +830,9 @@ func TestPoll_BackoffResetsOnSuccess(t *testing.T) {
 		t.Fatalf("expected at least 5 calls, got %d", len(callTimes))
 	}
 
-	// Gap between call 4 and 5 should be ~1s (reset backoff), not ~4s
+	// Gap between call 4 and 5 should be ~1ms (reset backoff), not ~4ms.
 	gap := callTimes[4].Sub(callTimes[3])
-	if gap > 2*time.Second {
-		t.Errorf("backoff did not reset after success: gap between call 4 and 5 was %v, expected ~1s", gap)
+	if gap > 50*time.Millisecond {
+		t.Errorf("backoff did not reset after success: gap between call 4 and 5 was %v, expected ~1ms", gap)
 	}
 }

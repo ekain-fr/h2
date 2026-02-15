@@ -8,7 +8,25 @@ import (
 	"time"
 
 	"h2/internal/session/agent"
+	"h2/internal/session/agent/collector"
 )
+
+// waitForSessionState polls StateChanged until the target state is reached.
+func waitForSessionState(t *testing.T, s *Session, target agent.State, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		if got, _ := s.State(); got == target {
+			return
+		}
+		select {
+		case <-s.StateChanged():
+		case <-deadline:
+			got, _ := s.State()
+			t.Fatalf("timed out waiting for %v, got %v", target, got)
+		}
+	}
+}
 
 func TestOtelCollector_StartsOnRandomPort(t *testing.T) {
 	s := New("test", "claude", nil)
@@ -155,6 +173,10 @@ func (t otelOnlyAgentType) PrependArgs(sessionID string) []string              {
 func (t otelOnlyAgentType) ChildEnv(cp *agent.CollectorPorts) map[string]string { return nil }
 
 func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
+	old := collector.IdleThreshold
+	collector.IdleThreshold = 10 * time.Millisecond
+	t.Cleanup(func() { collector.IdleThreshold = old })
+
 	// Use an otel-only agent type so the OtelCollector is the primary
 	// state source (not hooks).
 	s := New("test", "true", nil)
@@ -166,10 +188,7 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 	}
 
 	// Let it go idle.
-	time.Sleep(agent.IdleThreshold + 500*time.Millisecond)
-	if got, _ := s.State(); got != agent.StateIdle {
-		t.Fatalf("expected StateIdle, got %v", got)
-	}
+	waitForSessionState(t, s, agent.StateIdle, 2*time.Second)
 
 	// Send an OTEL event to wake it up.
 	payload := `{
@@ -191,12 +210,8 @@ func TestOtelCollector_StateTransitionOnEvent(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// Give watchState time to process.
-	time.Sleep(100 * time.Millisecond)
-
-	if got, _ := s.State(); got != agent.StateActive {
-		t.Fatalf("expected StateActive after OTEL event, got %v", got)
-	}
+	// Wait for state to become active via channel.
+	waitForSessionState(t, s, agent.StateActive, 2*time.Second)
 }
 
 func TestOtelMetrics_AccumulatesTokensAndCost(t *testing.T) {
