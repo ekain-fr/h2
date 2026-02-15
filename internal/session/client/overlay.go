@@ -75,6 +75,10 @@ type Client struct {
 	TakePassthrough    func()      // force-take passthrough from current owner
 	IsPassthroughLocked func() bool // returns true if another client owns passthrough
 
+	// Per-client terminal dimensions (used to resize VT on detach).
+	TermRows int
+	TermCols int
+
 	// Keybinding mode (kitty vs legacy).
 	KeybindingMode KeybindingMode
 	KittyKeyboard  bool // true if kitty keyboard protocol is active
@@ -150,6 +154,8 @@ func (c *Client) WatchResize(sigCh <-chan os.Signal) {
 		}
 
 		c.VT.Mu.Lock()
+		c.TermRows = rows
+		c.TermCols = cols
 		c.VT.Resize(rows, cols, rows-c.ReservedRows())
 		if c.IsScrollMode() {
 			c.ClampScrollOffset()

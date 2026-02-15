@@ -48,6 +48,8 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 	// changed. Unnecessary resizes send SIGWINCH to the child, which can
 	// cause a screen clear + redraw race that produces a blank screen.
 	if req.Cols > 0 && req.Rows > 0 {
+		cl.TermRows = req.Rows
+		cl.TermCols = req.Cols
 		childRows := req.Rows - cl.ReservedRows()
 		if req.Rows != vt.Rows || req.Cols != vt.Cols || childRows != vt.ChildRows {
 			vt.Resize(req.Rows, req.Cols, childRows)
@@ -90,6 +92,32 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 
 	// Remove this client from the session.
 	s.RemoveClient(cl)
+
+	// Resize VT to fit remaining clients and re-render. Use the minimum
+	// dimensions so all clients can display the full content (standard
+	// terminal multiplexer behavior). When the smaller window detaches,
+	// the remaining clients reclaim their full terminal area.
+	var minRows, minCols, reservedRows int
+	s.ForEachClient(func(c *client.Client) {
+		if c.TermRows <= 0 || c.TermCols <= 0 {
+			return // skip clients without known dimensions (e.g. daemon placeholder)
+		}
+		if minRows == 0 || c.TermRows < minRows {
+			minRows = c.TermRows
+		}
+		if minCols == 0 || c.TermCols < minCols {
+			minCols = c.TermCols
+		}
+		reservedRows = c.ReservedRows()
+	})
+	if minRows > 0 && minCols > 0 && (minRows != vt.Rows || minCols != vt.Cols) {
+		vt.Resize(minRows, minCols, minRows-reservedRows)
+		s.ForEachClient(func(c *client.Client) {
+			c.Output.Write([]byte("\033[2J"))
+			c.RenderScreen()
+			c.RenderBar()
+		})
+	}
 	vt.Mu.Unlock()
 
 	_ = attach // keep reference alive for the duration
@@ -135,6 +163,8 @@ func (d *Daemon) readClientInput(conn net.Conn, cl *client.Client) {
 			if ctrl.Type == "resize" {
 				vt := s.VT
 				vt.Mu.Lock()
+				cl.TermRows = ctrl.Rows
+				cl.TermCols = ctrl.Cols
 				childRows := ctrl.Rows - cl.ReservedRows()
 				vt.Resize(ctrl.Rows, ctrl.Cols, childRows)
 				if cl.IsScrollMode() {

@@ -388,6 +388,8 @@ func (s *Session) RunInteractive() error {
 
 	// Initialize client.
 	s.Client = s.NewClient()
+	s.Client.TermRows = rows
+	s.Client.TermCols = cols
 	s.AddClient(s.Client)
 
 	minRows := 3
