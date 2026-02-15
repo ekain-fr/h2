@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"net"
 	"os"
 	"path/filepath"
@@ -67,11 +68,24 @@ agents:
 `
 	os.WriteFile(filepath.Join(h2Root, "pods", "templates", "backend.yaml"), []byte(tmplContent), 0o644)
 
+	var buf bytes.Buffer
 	cmd := newPodListCmd()
+	cmd.SetOut(&buf)
 	cmd.SetArgs([]string{})
 	err := cmd.Execute()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "backend-team") {
+		t.Errorf("expected 'backend-team' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "builder") {
+		t.Errorf("expected 'builder' in output, got: %s", out)
+	}
+	if !strings.Contains(out, "tester") {
+		t.Errorf("expected 'tester' in output, got: %s", out)
 	}
 }
 

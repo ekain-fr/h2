@@ -431,6 +431,12 @@ agents:
 	if !strings.Contains(out, "2 agents") {
 		t.Errorf("expected '2 agents' in pod list: %s", out)
 	}
+	if !strings.Contains(out, "a1") {
+		t.Errorf("expected agent 'a1' in pod list: %s", out)
+	}
+	if !strings.Contains(out, "a2") {
+		t.Errorf("expected agent 'a2' in pod list: %s", out)
+	}
 }
 
 // §9.5 h2 pod stop stops all agents in pod

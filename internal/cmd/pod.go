@@ -288,12 +288,20 @@ func newPodListCmd() *cobra.Command {
 				return nil
 			}
 
+			w := cmd.OutOrStdout()
 			for _, t := range templates {
 				name := t.PodName
 				if name == "" {
 					name = "(unnamed)"
 				}
-				fmt.Printf("%-20s %d agents\n", name, len(t.Agents))
+				fmt.Fprintf(w, "%-20s %d agents\n", name, len(t.Agents))
+				for _, a := range t.Agents {
+					role := a.Role
+					if role == "" {
+						role = "default"
+					}
+					fmt.Fprintf(w, "  %-18s (role: %s)\n", a.Name, role)
+				}
 			}
 			return nil
 		},
