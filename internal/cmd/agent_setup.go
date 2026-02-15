@@ -11,6 +11,10 @@ import (
 	"h2/internal/session"
 )
 
+// forkDaemonFunc is the function used to fork daemon processes.
+// Tests override this to avoid spawning real processes.
+var forkDaemonFunc = session.ForkDaemon
+
 // setupAndForkAgent sets up the agent session, forks the daemon,
 // and optionally attaches to it. This is shared by both 'h2 run' and 'h2 bridge'.
 // The caller is responsible for loading the role and applying any overrides.
@@ -79,7 +83,7 @@ func doSetupAndForkAgent(name string, role *config.Role, detach bool, pod string
 	sessionID := uuid.New().String()
 
 	// Fork the daemon.
-	if err := session.ForkDaemon(session.ForkDaemonOpts{
+	if err := forkDaemonFunc(session.ForkDaemonOpts{
 		Name:            name,
 		SessionID:       sessionID,
 		Command:         cmdCommand,

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"h2/internal/config"
+	"h2/internal/session"
 	"h2/internal/session/message"
 	"h2/internal/socketdir"
 )
@@ -308,6 +309,15 @@ agents:
 func TestPodLaunchCmd_TemplateWithVarRendering(t *testing.T) {
 	h2Root := setupPodTestEnv(t)
 
+	// Mock ForkDaemon to prevent spawning real processes.
+	var forkOpts []session.ForkDaemonOpts
+	origFork := forkDaemonFunc
+	forkDaemonFunc = func(opts session.ForkDaemonOpts) error {
+		forkOpts = append(forkOpts, opts)
+		return nil
+	}
+	t.Cleanup(func() { forkDaemonFunc = origFork })
+
 	// Template that uses a variable in an agent name.
 	tmplContent := `variables:
   prefix:
@@ -324,23 +334,32 @@ agents:
 	roleContent := "name: default\ninstructions: |\n  test\n"
 	os.WriteFile(filepath.Join(h2Root, "roles", "default.yaml"), []byte(roleContent), 0o644)
 
-	// This will fail at setupAndForkAgentQuiet (can't actually fork in tests),
-	// but we verify it gets past template rendering and var parsing.
 	cmd := newPodLaunchCmd()
 	cmd.SetArgs([]string{"vartest"})
 	err := cmd.Execute()
-	// We expect it to either succeed or fail at the fork step, not at template rendering.
 	if err != nil {
-		// If it fails, it should be at the fork/setup stage, not at template rendering.
-		errStr := err.Error()
-		if strings.Contains(errStr, "required variables") || strings.Contains(errStr, "template") {
-			t.Fatalf("should not fail at template rendering: %v", err)
-		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(forkOpts) != 1 {
+		t.Fatalf("expected 1 fork call, got %d", len(forkOpts))
+	}
+	if forkOpts[0].Name != "dev-worker" {
+		t.Errorf("expected agent name 'dev-worker', got %q", forkOpts[0].Name)
 	}
 }
 
 func TestPodLaunchCmd_CLIVarOverridesDefault(t *testing.T) {
 	h2Root := setupPodTestEnv(t)
+
+	// Mock ForkDaemon to prevent spawning real processes.
+	var forkOpts []session.ForkDaemonOpts
+	origFork := forkDaemonFunc
+	forkDaemonFunc = func(opts session.ForkDaemonOpts) error {
+		forkOpts = append(forkOpts, opts)
+		return nil
+	}
+	t.Cleanup(func() { forkDaemonFunc = origFork })
 
 	tmplContent := `variables:
   prefix:
@@ -359,11 +378,14 @@ agents:
 	cmd := newPodLaunchCmd()
 	cmd.SetArgs([]string{"--var", "prefix=staging", "override"})
 	err := cmd.Execute()
-	// Will fail at fork step, but should not fail at template rendering.
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "required variables") || strings.Contains(errStr, "template") {
-			t.Fatalf("should not fail at template rendering: %v", err)
-		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(forkOpts) != 1 {
+		t.Fatalf("expected 1 fork call, got %d", len(forkOpts))
+	}
+	if forkOpts[0].Name != "staging-worker" {
+		t.Errorf("expected agent name 'staging-worker', got %q", forkOpts[0].Name)
 	}
 }

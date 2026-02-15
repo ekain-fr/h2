@@ -142,7 +142,7 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 			sessionID := uuid.New().String()
 
 			// Fork a daemon process.
-			if err := session.ForkDaemon(session.ForkDaemonOpts{
+			if err := forkDaemonFunc(session.ForkDaemonOpts{
 				Name:      name,
 				SessionID: sessionID,
 				Command:   cmdCommand,
