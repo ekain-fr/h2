@@ -51,6 +51,15 @@ func (d *Daemon) handleAttach(conn net.Conn, req *message.Request) {
 		childRows := req.Rows - cl.ReservedRows()
 		if req.Rows != vt.Rows || req.Cols != vt.Cols || childRows != vt.ChildRows {
 			vt.Resize(req.Rows, req.Cols, childRows)
+			// Clear and re-render existing clients so they don't retain
+			// a ghost status bar from the old (larger) dimensions.
+			d.Session.ForEachClient(func(existing *client.Client) {
+				if existing != cl {
+					existing.Output.Write([]byte("\033[2J"))
+					existing.RenderScreen()
+					existing.RenderBar()
+				}
+			})
 		}
 	}
 
@@ -134,6 +143,14 @@ func (d *Daemon) readClientInput(conn net.Conn, cl *client.Client) {
 				cl.Output.Write([]byte("\033[2J"))
 				cl.RenderScreen()
 				cl.RenderBar()
+				// Clear and re-render other clients at the new dimensions.
+				d.Session.ForEachClient(func(existing *client.Client) {
+					if existing != cl {
+						existing.Output.Write([]byte("\033[2J"))
+						existing.RenderScreen()
+						existing.RenderBar()
+					}
+				})
 				vt.Mu.Unlock()
 			}
 		}
