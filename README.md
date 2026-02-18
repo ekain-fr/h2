@@ -3,7 +3,7 @@
 A harness for your harnesses. An agent runner, messaging, and orchestration layer for AI coding Agents.
 
 <p align="left">
-  <img src="docs/images/h2-hero.jpg" alt="Ox with a harness pulling a payload" width="600">
+  <img src="docs/images/h2-hero.jpg" alt="Ox with a harness pulling a payload." width="800">
 </p>
 
 ## What it does
@@ -100,6 +100,46 @@ coder-1: how's the auth module coming along?
 
 You can also reply directly to a message from a particular agent to continue the conversation with them. Run `/h2` and `/bd` commands in Telegram to check on agent and project statuses without leaving the chat.
 
+### Telegram Configuration
+
+To configure a telegram bot:
+
+- Create a telegram account
+- Message the [Bot Father](https://telegram.me/BotFather) with /newbot
+- Give your bot a name - this should be short and human readable, you can also it change it any time.
+- Give your bot a (long, unguessable) username. The max username length is 32 characters.\*
+- Bot Father will reply with a success message, including the HTTP API token.
+
+\* I recommend making the username a short prefix based on the name to make it recognizable, then append a long random string to make it unguessable. Anyone that knows your username could try to message your bot, and even though h2 will filter out any messages that don't come from your account using the chat.id field, it's still nice if the username is unguessable. Don't commit it or share it anywhere after creating it.
+
+Telegram doesn't let you just set bots to completely private, but you can do the following to make it as private as possible:
+
+Prevent it from joining groups:
+
+- Send /setjoingroups to Bot Father
+- Send @ your bot's username that you created above
+- Choose: Disable
+
+Disable inline mode (being able to @ message it in other convos):
+
+- Send /setinline
+- Send @ your bot's username that you created above
+- Send /empty to disable inline mode
+
+Keep privacy mode enabled:
+
+- Send /setprivacy
+- Send @ your bot's username that you created above
+- Choose Enable (it may already be enabled by default)
+
+Now find your chat id:
+
+- Open this link in your browser, replacing `<YOUR_BOT_TOKEN>` with your bot token copied from above: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+- You will probably see an empty json response.
+- Message your new bot that you just created by its username, either from the mobile app or telegram web app.
+- Open the URL again, and you'll now see a json payload with a `"chat": { "id": ... }` in it. That's your chat_id
+- Uncomment the lines from the h2 config.yaml file for the bridge, pasting in your bot token and chat id.
+
 ## Tier 3: Orchestration
 
 > Still very much a work in progress — expect this to evolve significantly.
@@ -166,9 +206,17 @@ The periodic check-ins between coders and reviewers serve a dual purpose: code q
 
 ### Install
 
+Right now the best way to install is from source, building the main branch:
+
 ```bash
-go install github.com/dcosson/h2@latest
+git clone https://github.com/dcosson/h2.git
+cd h2
+make build
+# then symlink it onto your path somewhere, eg:
+ln -s $(pwd)/h2 ~/.local/bin/h2
 ```
+
+The nice thing about cloning the repo is that you can also always ask your favorite agent how it works if something isn't working.
 
 ### Initialize
 
@@ -197,7 +245,7 @@ h2 run
 
 This starts an agent with the default role and attaches you to its terminal. Start typing to give it work.
 
-### Run a team
+### Run a pod of agents
 
 ```bash
 # Start the bridge (connects Telegram + launches concierge)
@@ -210,7 +258,7 @@ h2 run --role coding --name coder-2 --detach
 h2 run --role reviewer --name reviewer --detach
 
 # Send work to the concierge
-h2 send concierge "Set up the team to work on issue #42"
+h2 send concierge "Set up the pod to work on issue #42"
 
 # Check on everyone
 h2 list
@@ -221,16 +269,17 @@ h2 peek coder-1
 
 ```
 ~/h2home/                     # your h2 directory (created by h2 init)
-  roles/                      # role definitions (YAML)
-  pods/
-    templates/                # pod templates for launching teams
-  sessions/                   # per-agent session metadata
-  sockets/                    # Unix domain sockets for IPC
   claude-config/
-    default/                  # shared Claude config
+    default/                  # default Claude config. You can create other named configs and reference them in your roles.
       .claude.json            # auth credentials (persists across resets)
       settings.json           # hooks, permissions, tool config
-      CLAUDE.md               # agent instructions
+      CLAUDE.md               # global agent instructions
+  roles/                      # role definitions (YAML)
+  pods/
+    roles/                    # role definitions that are only available to run in pods
+    templates/                # templates for launching pods of workers
+  sessions/                   # per-agent session metadata
+  sockets/                    # Unix domain sockets for IPC
   projects/                   # your code checkouts
   worktrees/                  # git worktrees for agent isolation
   config.yaml                 # h2 global config
@@ -256,7 +305,7 @@ h2 peek coder-1
 | `h2 peek <name>`           | View recent agent activity        |
 | `h2 stop <name>`           | Stop an agent                     |
 | `h2 send <name> <msg>`     | Send a message to an agent        |
-| `h2 pod launch <template>` | Launch a team of agents           |
+| `h2 pod launch <template>` | Launch a pod of agents            |
 | `h2 pod stop <name>`       | Stop all agents in a pod          |
 | `h2 bridge`                | Start Telegram bridge + concierge |
 | `h2 role list`             | List available roles              |
