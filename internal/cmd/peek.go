@@ -31,7 +31,7 @@ one-sentence summary via Claude haiku.
   h2 peek concierge              Show recent activity for an agent
   h2 peek --log-path <path>      Use an explicit JSONL file
   h2 peek concierge --summarize  Summarize with haiku
-  h2 peek concierge -n 50        Show last 50 records (default 500)`,
+  h2 peek concierge -n 500       Show last 500 records (default 150)`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Resolve the log path.
@@ -74,7 +74,7 @@ one-sentence summary via Claude haiku.
 	}
 
 	cmd.Flags().StringVar(&logPath, "log-path", "", "Explicit path to a Claude Code session JSONL file")
-	cmd.Flags().IntVarP(&numLines, "num-lines", "n", 500, "Number of JSONL records to read from the end")
+	cmd.Flags().IntVarP(&numLines, "num-lines", "n", 150, "Number of JSONL records to read from the end")
 	cmd.Flags().IntVar(&messageChars, "message-chars", 500, "Max characters for message text (0 for no limit)")
 	cmd.Flags().BoolVar(&summarize, "summarize", false, "Summarize activity with Claude haiku")
 
