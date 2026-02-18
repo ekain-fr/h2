@@ -1,6 +1,6 @@
 # h2
 
-An agent runner with messaging and orchestration for AI coding agents.
+A harness for your harnesses. An agent runner, messaging, and orchestration layer for AI coding Agents.
 
 h2 manages AI coding agents as background processes, lets them message each other and you, and coordinates teams of agents working on projects together. It's a 3-tier system — use as much or as little as you need.
 
@@ -107,12 +107,12 @@ Each role can point to a different `claude_config_dir`, which controls which `CL
 
 ### Pods
 
-Pods launch a team of agents together from a template:
+Pods launch a group of agents together from a template:
 
 ```bash
-h2 pod launch my-team
+h2 pod launch my-group
 h2 pod list
-h2 pod stop my-team
+h2 pod stop my-group
 ```
 
 ### Task Management with beads-lite
@@ -126,16 +126,16 @@ bd show auth-module-abc
 bd dep add B A --type blocks
 ```
 
-### Suggested Team Structure
+### Suggested Pod Structure
 
-What works well in practice:
+What I have found works well:
 
 - **Concierge**: Your primary agent. Handles quick questions directly, delegates significant work to specialists, stays responsive.
 - **Scheduler**: Manages the beads task board. Assigns tasks to coders, monitors progress, sends periodic status updates.
 - **Coders** (2-4): Work on assigned tasks from the beads board. Write code, run tests, commit to feature branches.
 - **Reviewer** (1-2): Reviews completed work, files follow-up bug tasks, approves merges.
 
-The periodic check-ins between workers and reviewers serve a dual purpose: code quality and **distributed memory**. When worker agents' contexts fill up and get compacted, the important information has already been duplicated to the reviewer's context through their check-in messages.
+The periodic check-ins between coders and reviewers serve a dual purpose: code quality and **distributed memory**. When worker agents' contexts fill up and get compacted, the important information has already been duplicated to the reviewer's context through their check-in messages.
 
 ## Getting Started
 
@@ -213,7 +213,7 @@ h2 peek coder-1
 
 ## Design Decisions
 
-**Harness-agnostic**: h2 is not a custom agent harness. Instead, it wraps existing agent TUIs (Claude Code, Codex, etc.) by writing messages into their TTY and tracking state through hooks and output parsing. This means h2 works with whatever agent tool you prefer — including the big out-of-the-box ones that don't expose configuration APIs. It also means h2 works with subscription plans (Claude Max, ChatGPT Pro) since it communicates through the same interface a human would, with no API keys required.
+**Harness-agnostic**: h2 is not a custom agent harness. Instead, it wraps existing agent TUIs (Claude Code, Codex, etc.) by writing messages into their TTY and tracking state through hooks and output parsing. This means h2 works with whatever agent tool you prefer — including the commercial ones that don't expose configuration APIs. It also means h2 works with subscription plans (Claude Max, ChatGPT Pro) since it communicates through the same interface a human would, with no API keys required. Currently we only support Claude Code but we'll be adding more soon.
 
 **TTY-level communication**: Messages are delivered by writing directly into the agent's TTY input. h2 tracks agent state (thinking, tool use, waiting on permission, compacting) and holds messages until the agent is in a state where it can accept input. This approach is simple and universal — any agent that reads from a terminal works with h2.
 
