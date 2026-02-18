@@ -26,17 +26,23 @@ h2 attach coder-1               # take over an agent's terminal
 h2 stop coder-1                 # stop an agent
 ```
 
-When you run an agent (or attach to one already running) you'll see the h2 status bar with some info about the session and the input bar at the bottom of the window, with the regular agent TUI app running above it.
-
-H2 is in its default Normal mode - in this mode, almost all control sequences, arrows, enter, escape, mouse scroll wheel, etc. pass through to the underlying app so you can navigate & respond to most menu options. Your cursor is active in the h2 input bar at the bottom of the screen, so you can type messages and send them as if you were typing into the agent's input directly.
+The command `h2 run` will run a new agent with the default role and attach to it in the foreground. You can think about the h2 runner UI as similar to tmux — it’s a terminal multiplexer specifically designed for running agent TUI apps. You can attach and detach from it, letting agents run in the foreground background. It registers hooks to track and expose the current state of what the agent is doing, registers the telemetry endpoints to track tool and token usage, and registers a permission request handler with some useful behavior out of the box like running a background agent to review and deny or allow tool uses.
 
 <p align="left">
-  <img src="docs/images/h2-normal-mode.png" alt="h2 UI example" width="600">
+  <img src="docs/images/h2-normal-mode.png" alt="The h2 window in normal mode" width="600">
 </p>
 
-The benefit of having a separate h2 input bar is that while you're typing out a manual message, the agent can be receive messages from other agents and it won't conflict with what you're writing (which was a problem I ran into using tmux and send-keys for messaging).
+When you launch or attach to h2, you start in Normal mode. Anything you type here goes into the h2 input buffer at the bottom of the window rather than into the TUI app directly. The benefit of this is that you can keep typing while the agent is working, while permission request prompts are coming up, while the agent is receiving messages from other agents, etc. and your message doesn’t ever interfere with what the agent is doing. After typing a message and hitting enter, it is submitted to the agent (usually directly, the same as if you typed straight into the agent input, but technically it goes through the h2 message queue, described below). For convenience, in normal mode most control sequences, enter, escape, etc. keys are passed through to the underlying agent so you can interact with prompts, see more output with ctrl+o / ctrl+e, etc. without changing modes.
 
-Hit ctrl+\ to get to Menu mode. You'll see keyboard shortcut options to detach or stop the agent process, as well as get to Passthrough mode (p). In Passthrough mode, you're using the agent TUI like normal, typing directly into it, just like using it without h2. In this mode, any messages sent to your agent are being queued and will be sent when you exit Passthrough mode. Passthrough mode is exclusive so if multiple windows are attached to the same session, only one of them can be using it at a time. Use ctrl+\ again to exit back to normal mode.
+Typing `ctrl + \` will take you to the Menu mode, where you can detach or quit (kill) the agent process. Typing `p` here will take you to Passthrough mode.
+
+<p align="left">
+  <img src="docs/images/h2-passthrough-mode.png" alt="The h2 window in passthrough mode" width="600">
+</p>
+
+In Passthrough mode, your cursor is active in the regular agent input prompt, so you can type and interact with the agent exactly as if you weren’t using h2. Messages from other agents are queued up to be delivered once you return to Normal mode. If multiple windows are attached to the same session, only one of them can be using passthrough mode at a time. Typing ctrl+\ again will take you out of Passthrough mode.
+
+There are also Scroll and ScrollPassthrough modes where you can access the scroll-back history using your mouse scroll wheel from either normal or passthrough mode. One small gotcha here is that to select & copy text, you have to hold Shift first, similar to some tmux scroll mode settings. There’s a popup that will let you know about it.
 
 `h2 list` shows each agent's real-time state — active, idle, thinking, in tool use, waiting on permission, compacting — along with usage stats (tokens, cost) tracked automatically for every agent:
 
@@ -47,7 +53,9 @@ Agents
   ○ reviewer (reviewer) claude — Idle 10m, up 3h, 20k $1.50
 ```
 
-h2 tracks agent state through Claude Code's hook system. A buffered input bar separates your typing from the agent's output, so you're less likely to accidentally interfere with a running agent.
+`h2 peek` shows you a short summary of recent messages & tool uses to quick view of what an agent has been doing without attaching to the session.
+
+You can run h2 commands through Telegram as well with /h2.
 
 ### Permissions
 
