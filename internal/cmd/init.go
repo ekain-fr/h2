@@ -97,6 +97,12 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("register route: %w", err)
 			}
 
+			// Create the default role.
+			rolesDir := filepath.Join(abs, "roles")
+			if _, err := createRole(rolesDir, "default"); err != nil {
+				return fmt.Errorf("create default role: %w", err)
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "Initialized h2 directory at %s (prefix: %s)\n", abs, resolvedPrefix)
 			return nil
 		},

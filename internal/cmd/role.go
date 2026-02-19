@@ -119,28 +119,35 @@ func newRoleInitCmd() *cobra.Command {
 		Short: "Create a new role file with defaults",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			dir := config.RolesDir()
-
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("create roles dir: %w", err)
+			path, err := createRole(config.RolesDir(), args[0])
+			if err != nil {
+				return err
 			}
-
-			path := filepath.Join(dir, name+".yaml")
-			if _, err := os.Stat(path); err == nil {
-				return fmt.Errorf("role %q already exists at %s", name, path)
-			}
-
-			template := roleTemplate(name)
-
-			if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-				return fmt.Errorf("write role file: %w", err)
-			}
-
 			fmt.Printf("Created %s\n", path)
 			return nil
 		},
 	}
+}
+
+// createRole creates a role YAML file in rolesDir. Returns the path of the
+// created file. Returns an error if the role already exists.
+func createRole(rolesDir, name string) (string, error) {
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		return "", fmt.Errorf("create roles dir: %w", err)
+	}
+
+	path := filepath.Join(rolesDir, name+".yaml")
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("role %q already exists at %s", name, path)
+	}
+
+	template := roleTemplate(name)
+
+	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
+		return "", fmt.Errorf("write role file: %w", err)
+	}
+
+	return path, nil
 }
 
 // roleTemplate returns the YAML template for a role, with special templates

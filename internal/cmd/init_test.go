@@ -78,6 +78,12 @@ func TestInitCmd_CreatesStructure(t *testing.T) {
 	if !strings.Contains(buf.String(), abs) {
 		t.Errorf("output = %q, want it to contain %q", buf.String(), abs)
 	}
+
+	// Default role should be created.
+	rolePath := filepath.Join(dir, "roles", "default.yaml")
+	if _, err := os.Stat(rolePath); err != nil {
+		t.Errorf("expected default role to be created at %s: %v", rolePath, err)
+	}
 }
 
 func TestInitCmd_RefusesOverwrite(t *testing.T) {
