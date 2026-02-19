@@ -1,332 +1,581 @@
-# Design Plan: Codex Agent Type for h2
+# Design Plan: Codex Agent Type + Agent Monitor Adapter Pattern
 
 ## Overview
 
-Add OpenAI Codex CLI as a first-class agent type in h2, alongside the existing `ClaudeCodeType` and `GenericType`. Codex has a different architecture from Claude Code — no OTEL, no hooks, but it does offer a structured JSONL output mode via `codex exec --json` that we can parse for rich state tracking.
+Add OpenAI Codex CLI as a first-class agent type in h2, alongside Claude Code. More importantly, refactor agent observation into an **adapter pattern** so each agent type translates its native telemetry into a common set of agent events. This avoids h2 core needing to understand OTEL vs hooks vs JSON-RPC — it just consumes normalized events from an `AgentMonitor`.
 
-## 1. CodexType Implementation
+The adapter also standardizes the **reverse direction** — how h2 delivers data back into agent processes. Today this is always PTY stdin, but future agent types may support other input methods (e.g. API calls, protocol messages).
 
-### New file: `internal/session/agent/codex_type.go`
+### Architecture
 
-Implement the `AgentType` interface:
+```mermaid
+graph TB
+    subgraph Processes
+        CC[Claude Code<br/>process]
+        CX[Codex<br/>process]
+    end
+
+    subgraph "Claude Code Adapter"
+        CC -->|OTEL HTTP| CC_OTEL[OtelServer<br/>Collector]
+        CC -->|hooks via socket| CC_HOOK[Hook<br/>Collector]
+        CC -->|session JSONL on disk| CC_LOG[SessionLog<br/>Collector]
+        CC_OTEL --> CC_EMIT[Emit AgentEvents]
+        CC_HOOK --> CC_EMIT
+        CC_LOG --> CC_EMIT
+    end
+
+    subgraph "Codex Adapter"
+        CX -->|OTEL HTTP| CX_OTEL[OtelServer<br/>Collector]
+        CX_OTEL --> CX_EMIT[Emit AgentEvents]
+    end
+
+    CC_EMIT -->|AgentEvent| MON[Agent Monitor]
+    CX_EMIT -->|AgentEvent| MON
+
+    MON -->|real-time| STATE[State & Metrics]
+    MON -->|append| STORE[h2 Event Store<br/>unified JSONL per session]
+    STATE --> CORE[h2 core:<br/>state, metrics, status]
+    STORE --> PEEK[h2 peek:<br/>reads from event store]
+```
+
+### Reverse Direction (h2 → Agent)
+
+```mermaid
+graph TB
+    CORE[h2 core:<br/>message delivery,<br/>interrupt, input]
+
+    subgraph "Claude Code Adapter"
+        CC_INPUT[InputSender]
+        CC_INPUT -->|write to PTY stdin| CC[Claude Code process]
+    end
+
+    subgraph "Codex Adapter"
+        CX_INPUT[InputSender]
+        CX_INPUT -->|write to PTY stdin| CX[Codex process]
+    end
+
+    subgraph "Future Adapter (e.g. Pi Agent)"
+        FX_INPUT[InputSender]
+        FX_INPUT -->|sendMessage API| FX[Agent process]
+    end
+
+    CORE --> CC_INPUT
+    CORE --> CX_INPUT
+    CORE --> FX_INPUT
+```
+
+## 1. AgentEvent — The Common Schema
+
+A normalized event type that all adapters emit.
+
+### Package: `internal/session/agent/monitor`
 
 ```go
-type CodexType struct{}
-
-func NewCodexType() *CodexType { return &CodexType{} }
-
-func (t *CodexType) Name() string           { return "codex" }
-func (t *CodexType) Command() string         { return "codex" }
-func (t *CodexType) DisplayCommand() string   { return "codex" }
-func (t *CodexType) OtelParser() OtelParser   { return nil }  // No OTEL support
-func (t *CodexType) Collectors() CollectorSet { return CollectorSet{Otel: false, Hooks: false} }
-
-func (t *CodexType) PrependArgs(sessionID string) []string {
-    // No session-id concept in Codex. However, we may want to add
-    // flags like --full-auto or --model here based on role config.
-    return nil
+// AgentEvent is the normalized event emitted by adapters.
+type AgentEvent struct {
+    Type      AgentEventType
+    Timestamp time.Time
+    Data      any // type-specific payload
 }
 
-func (t *CodexType) ChildEnv(cp *CollectorPorts) map[string]string {
-    // No collector env vars needed (no OTEL).
-    return nil
+type AgentEventType int
+
+const (
+    EventSessionStarted AgentEventType = iota
+    EventTurnStarted
+    EventTurnCompleted
+    EventToolStarted
+    EventToolCompleted
+    EventApprovalRequested
+    EventAgentMessage
+    EventStateChange
+    EventSessionEnded
+)
+```
+
+**Event payloads:**
+
+```go
+type SessionStartedData struct {
+    ThreadID string
+    Model    string
+}
+
+type TurnCompletedData struct {
+    TurnID       string
+    InputTokens  int64
+    OutputTokens int64
+    CachedTokens int64
+    CostUSD      float64
+}
+
+type ToolCompletedData struct {
+    ToolName   string
+    CallID     string
+    DurationMs int64
+    Success    bool
+}
+
+type StateChangeData struct {
+    State    State
+    SubState SubState
 }
 ```
 
-### Update `ResolveAgentType` in `agent_type.go`
+`State` and `SubState` types move into the `monitor` package (currently in `collector`). These are the core state types used throughout h2 — they belong with the monitor, not with any specific collector.
+
+## 2. AgentAdapter Interface
+
+### Package: `internal/session/agent/adapter`
 
 ```go
-func ResolveAgentType(command string) AgentType {
-    switch filepath.Base(command) {
-    case "claude":
-        return NewClaudeCodeType()
-    case "codex":
-        return NewCodexType()
-    default:
-        return NewGenericType(command)
+// AgentAdapter translates agent-specific telemetry into normalized AgentEvents.
+type AgentAdapter interface {
+    // Name returns the adapter identifier (e.g. "claude-code", "codex").
+    Name() string
+
+    // PrepareForLaunch returns env vars and CLI args to inject into the
+    // child process so the adapter can receive telemetry from it.
+    // Called before the agent process starts.
+    PrepareForLaunch(agentName string) (LaunchConfig, error)
+
+    // Start begins consuming agent-specific events and emitting AgentEvents.
+    // Blocks until ctx is cancelled or the adapter encounters a fatal error.
+    Start(ctx context.Context, events chan<- monitor.AgentEvent) error
+
+    // HandleHookEvent processes a hook event received on the agent's Unix
+    // socket. Not all adapters use hooks — return false if not handled.
+    HandleHookEvent(eventName string, payload json.RawMessage) bool
+
+    // Stop cleans up resources (HTTP servers, goroutines, etc).
+    Stop()
+}
+
+// InputSender delivers input to an agent process.
+// The default implementation writes to PTY stdin, but agent types
+// with richer APIs can override this.
+type InputSender interface {
+    // SendInput delivers text input to the agent.
+    SendInput(text string) error
+
+    // SendInterrupt sends an interrupt signal (e.g. Ctrl+C).
+    SendInterrupt() error
+}
+
+type LaunchConfig struct {
+    Env         map[string]string // extra env vars for child process
+    PrependArgs []string          // args to prepend before user args
+}
+```
+
+### Key design points
+
+- **HandleHookEvent**: The Daemon (socket listener) remains the single socket owner. On `hook_event` requests, it calls `adapter.HandleHookEvent()`. No dual-listener problem.
+- **PrepareForLaunch**: Returns both env vars and args. For Claude Code: OTEL endpoint env vars + `--session-id`. For Codex: `-c 'otel.trace_exporter=...'` args.
+- **Start**: Runs the adapter's internal event loop. Collectors (OTEL server, hook handler, etc.) live inside the adapter and feed into the events channel.
+- **InputSender**: Standardizes the reverse direction. Default is PTY stdin write (works for Claude Code and Codex). Future agent types can implement richer input methods (e.g. `sendMessage()` API for Pi Agent).
+
+## 3. Package Layout
+
+```
+internal/session/agent/
+├── adapter/
+│   ├── adapter.go             # AgentAdapter interface, InputSender, LaunchConfig
+│   ├── claude/
+│   │   ├── adapter.go         # ClaudeCodeAdapter
+│   │   │                      # Owns: OtelServer + HookHandler + SessionLogCollector
+│   │   ├── otel_parser.go     # Claude-specific OTEL log/metrics parsing
+│   │   ├── hook_handler.go    # Hook event → AgentEvent translation
+│   │   │                      # (state derivation: PreToolUse → thinking, etc.)
+│   │   └── sessionlog.go      # Tails Claude's session JSONL, emits AgentEvents
+│   │                          # (full message text, tool call details for peek)
+│   └── codex/
+│       ├── adapter.go         # CodexAdapter
+│       │                      # Owns: OtelServer
+│       └── otel_parser.go     # Codex-specific OTEL trace event parsing
+├── shared/
+│   ├── otelserver/
+│   │   └── server.go          # Reusable OTEL HTTP server (binds random port,
+│   │                          # accepts /v1/logs, /v1/metrics, /v1/traces,
+│   │                          # dispatches raw payloads via callbacks)
+│   ├── outputcollector/
+│   │   └── output.go          # PTY output idle detector (always-on fallback)
+│   └── eventstore/
+│       └── store.go           # Append/read h2's unified AgentEvent JSONL
+│                              # (one file per session, h2-controlled format)
+├── monitor/
+│   ├── events.go              # AgentEvent, AgentEventType, payload structs
+│   ├── state.go               # State, SubState (moved from collector/)
+│   └── monitor.go             # AgentMonitor: consumes events, updates
+│                              # state/metrics, writes to EventStore
+├── agent.go                   # Agent struct (owns AgentMonitor + OutputCollector)
+├── agent_type.go              # AgentType interface (simplified)
+└── otel_metrics.go            # OtelMetrics, OtelMetricsSnapshot (agent-agnostic)
+```
+
+### `shared/` — Reusable components
+
+Adapter-agnostic building blocks that multiple adapters can compose:
+
+**`shared/otelserver/`** — OTEL HTTP server that binds a random port and dispatches raw payloads via callbacks. Both Claude and Codex adapters embed this.
+
+```go
+type OtelServer struct {
+    Port     int
+    listener net.Listener
+    server   *http.Server
+}
+
+type Callbacks struct {
+    OnLogs    func(body []byte)
+    OnMetrics func(body []byte)
+    OnTraces  func(body []byte)
+}
+
+func New(cb Callbacks) (*OtelServer, error) { ... }
+func (s *OtelServer) Stop() { ... }
+```
+
+**`shared/outputcollector/`** — PTY idle detector. Always created regardless of agent type. Monitors PTY output and emits active/idle based on a silence threshold. Feeds into the monitor as a fallback state source when the adapter doesn't provide precise state signals.
+
+**`shared/eventstore/`** — Durable storage for normalized `AgentEvent`s. One JSONL file per session in h2's session directory. The `AgentMonitor` appends every event as it processes it. Peek reads from this store instead of parsing agent-native log formats directly.
+
+```go
+type EventStore struct {
+    file *os.File
+}
+
+func Open(sessionDir string) (*EventStore, error) { ... }
+func (s *EventStore) Append(event monitor.AgentEvent) error { ... }
+func (s *EventStore) Read() ([]monitor.AgentEvent, error) { ... }
+func (s *EventStore) Tail(ctx context.Context) (<-chan monitor.AgentEvent, error) { ... }
+func (s *EventStore) Close() { ... }
+```
+
+This gives h2 full control over format, retention, and rotation — independent of how Claude Code or Codex store their own logs.
+
+### Adapters compose shared components
+
+Each adapter owns the collectors relevant to its agent type. All collectors within an adapter emit `AgentEvent`s into the adapter's output channel.
+
+**Claude Code adapter** owns:
+- `otelserver.OtelServer` — parses `/v1/logs` and `/v1/metrics` (token counts, tool results)
+- Hook handler — translates hook events into state transitions (thinking, tool use, permission, etc.)
+- Session log collector — tails Claude's session JSONL for full message text and tool call details (rich peek data that OTEL doesn't capture)
+
+**Codex adapter** owns:
+- `otelserver.OtelServer` — parses `/v1/traces` for Codex events (conversation starts, token counts, tool results)
+- (Codex session log collector is a Phase 3 follow-up — see open questions)
+
+## 4. Adapter Implementations
+
+### Claude Code Adapter
+
+Collectors: OtelServer + Hook handler + Session log tailer.
+
+```go
+type ClaudeCodeAdapter struct {
+    otelServer      *otelserver.OtelServer
+    hookHandler     *HookHandler
+    sessionLogTail  *SessionLogCollector
+    parser          *OtelParser
+    activityLog     *activitylog.Logger
+    sessionID       string
+    events          chan<- monitor.AgentEvent // set in Start()
+}
+
+func (a *ClaudeCodeAdapter) PrepareForLaunch(agentName string) (adapter.LaunchConfig, error) {
+    a.sessionID = uuid.New().String()
+    return adapter.LaunchConfig{
+        PrependArgs: []string{"--session-id", a.sessionID},
+        Env: map[string]string{
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "OTEL_EXPORTER_OTLP_ENDPOINT":  fmt.Sprintf("http://127.0.0.1:%d", a.otelServer.Port),
+            // ... other OTEL env vars
+        },
+    }, nil
+}
+
+func (a *ClaudeCodeAdapter) Start(ctx context.Context, events chan<- monitor.AgentEvent) error {
+    a.events = events
+    // Start session log tailer — reads Claude's session JSONL for
+    // full assistant messages and tool call content.
+    // This is the primary source for peek data.
+    go a.sessionLogTail.Run(ctx, events)
+    // OTEL and hooks feed events via callbacks (not blocking here).
+    <-ctx.Done()
+    return nil
+}
+
+func (a *ClaudeCodeAdapter) HandleHookEvent(eventName string, payload json.RawMessage) bool {
+    // Translate Claude hook events (PreToolUse, PostToolUse, SessionStart, etc.)
+    // into AgentEvents and emit on a.events
+    return true
+}
+```
+
+### Codex Adapter
+
+Collectors: OtelServer only (session log collector is a Phase 3 follow-up).
+
+```go
+type CodexAdapter struct {
+    otelServer *otelserver.OtelServer
+    parser     *OtelParser
+    events     chan<- monitor.AgentEvent
+}
+
+func (a *CodexAdapter) PrepareForLaunch(agentName string) (adapter.LaunchConfig, error) {
+    endpoint := fmt.Sprintf("http://127.0.0.1:%d", a.otelServer.Port)
+    return adapter.LaunchConfig{
+        PrependArgs: []string{
+            "-c", fmt.Sprintf(`otel.trace_exporter={type="otlp-http",endpoint="%s"}`, endpoint),
+        },
+    }, nil
+}
+
+func (a *CodexAdapter) HandleHookEvent(eventName string, payload json.RawMessage) bool {
+    return false // Codex doesn't use h2 hooks
+}
+```
+
+Codex OTEL event → AgentEvent mapping:
+
+| Codex OTEL Event | AgentEvent | Key Data |
+|---|---|---|
+| `codex.conversation_starts` | `EventSessionStarted` | `conversation.id` (thread ID), `model` |
+| `codex.user_prompt` | `EventTurnStarted` | `prompt_length` |
+| `codex.sse_event` (response.completed) | `EventTurnCompleted` | `input_token_count`, `output_token_count`, `cached_token_count` |
+| `codex.tool_result` | `EventToolCompleted` | `tool_name`, `duration_ms`, `success` |
+| `codex.tool_decision` (ask_user) | `EventApprovalRequested` | `tool_name`, `decision` |
+| `codex.api_request` | (metrics only) | `duration_ms`, `status_code` |
+
+## 5. AgentMonitor
+
+### Package: `internal/session/agent/monitor`
+
+Consumes `AgentEvent`s from the adapter and maintains the agent's state, metrics, and other derived data that h2 core queries.
+
+```go
+type AgentMonitor struct {
+    adapter     adapter.AgentAdapter
+    events      chan AgentEvent
+    metrics     *OtelMetrics
+    state       State
+    subState    SubState
+    threadID    string
+    // ... other derived state
+}
+
+func New(adpt adapter.AgentAdapter) *AgentMonitor { ... }
+
+// Run starts the adapter and processes events. Blocks until ctx is cancelled.
+func (m *AgentMonitor) Run(ctx context.Context) error {
+    go m.adapter.Start(ctx, m.events)
+    for {
+        select {
+        case ev := <-m.events:
+            m.processEvent(ev)
+        case <-ctx.Done():
+            return nil
+        }
     }
 }
 ```
 
-### Key decisions
+The `Agent` struct is refactored to own an `AgentMonitor` instead of directly managing collectors. The `OutputCollector` (PTY idle detection) stays as a fallback — it feeds `EventStateChange` events into the monitor when the adapter doesn't provide state signals.
 
-- **No OTEL, no hooks**: Codex CLI has neither, so `Collectors()` returns an empty set. The `OutputCollector` (always created by `Agent.StartCollectors()`) becomes the primary state collector — same as `GenericType`.
-- **PrependArgs**: Codex doesn't use `--session-id`. If we later want to pass `--full-auto` or `--model` based on role config, we can add those here.
-- **ChildEnv**: No special env vars needed.
+## 6. Reverse Direction — InputSender
 
-## 2. Collector Strategy
+The `InputSender` interface standardizes how h2 delivers data to agent processes.
 
-### Phase 1: OutputCollector only (MVP)
-
-For the initial implementation, Codex agents use `OutputCollector` as their sole/primary collector. This gives us:
-- Active/Idle state tracking based on PTY output
-- Works immediately with zero Codex-specific code
-
-This is the same behavior as `GenericType` agents, which is functional but provides only coarse-grained state (active vs idle based on a 2-second PTY silence threshold).
-
-### Phase 2: JSONL Stream Collector (future enhancement)
-
-Codex's `codex exec --json` mode emits structured JSONL events to stdout:
-- `thread.started`, `turn.started`, `turn.completed`, `turn.failed`
-- `item.started`, `item.updated`, `item.completed`
-- Items include: agent messages, reasoning, command executions, file changes
-
-A future `CodexJsonlCollector` could parse these events from the PTY output stream (they'd be mixed in with the terminal output) or by running Codex in `exec --json` mode where all output is JSONL.
-
-**However**, there's a fundamental tension: h2 manages agents in a PTY for interactive attach/detach. The `--json` flag on `codex exec` is designed for non-interactive use. If we want both interactive PTY support AND structured events, we'd need one of:
-
-1. **Parse JSONL from PTY output**: If Codex in interactive mode doesn't emit JSONL, this won't work.
-2. **Sidecar process**: Run `codex exec --json` as a separate process alongside the PTY agent, but this doubles the work and diverges state.
-3. **Post-hoc log parsing**: If Codex writes structured logs to a file, we could tail/parse that.
-
-**Recommendation**: Start with OutputCollector. Investigate whether Codex interactive mode produces any parseable structured output, or if there are log files we can tail. If so, build a `CodexJsonlCollector` as a follow-up.
-
-## 3. Command/Session Integration
-
-### `internal/cmd/run.go`
-
-No changes needed to `run.go` itself. The existing `--agent-type codex` flag already works because it passes the command string through to `ResolveAgentType()`. Similarly, roles with `agent_type: codex` will resolve correctly.
-
-However, the `childArgs()` method in `session.go` currently appends Claude-specific flags (e.g., `--append-system-prompt`, `--system-prompt`, `--model`, `--permission-mode`, `--allowedTools`, `--disallowedTools`). These are Claude CLI flags and should NOT be passed to Codex.
-
-### Changes needed in `internal/session/session.go`
-
-The `childArgs()` method needs to be agent-type-aware. Options:
-
-**Option A (recommended)**: Move role-to-CLI-arg mapping into the `AgentType` interface.
-
-Add a new method to `AgentType`:
+### Default: PTY stdin (works for Claude Code, Codex, generic)
 
 ```go
-// RoleArgs returns CLI args derived from role configuration.
-// Each agent type maps role fields (model, instructions, permissions, etc.)
-// to its own CLI flag format.
-RoleArgs(cfg RoleConfig) []string
-```
+type PTYInputSender struct {
+    pty *vt.VT  // the session's PTY
+}
 
-Where `RoleConfig` is a struct with the role fields:
+func (s *PTYInputSender) SendInput(text string) error {
+    _, err := s.pty.Write([]byte(text))
+    return err
+}
 
-```go
-type RoleConfig struct {
-    Model          string
-    Instructions   string
-    SystemPrompt   string
-    PermissionMode string
-    AllowedTools   []string
-    DisallowedTools []string
+func (s *PTYInputSender) SendInterrupt() error {
+    _, err := s.pty.Write([]byte{0x03}) // Ctrl+C
+    return err
 }
 ```
 
-- `ClaudeCodeType.RoleArgs()` would return `["--model", model, "--append-system-prompt", instructions, ...]`
-- `CodexType.RoleArgs()` would return `["--model", model]` (Codex supports `--model`), and handle instructions differently (perhaps via stdin prompt prefix or `--cd`/other flags).
+### Future: API-based input (e.g. Pi Agent with sendMessage)
 
-**Option B**: Keep `childArgs()` in session, but gate Claude-specific flags on `agentType.Name() == "claude"`. Simpler but less extensible.
+```go
+type APIInputSender struct {
+    endpoint string
+    client   *http.Client
+}
 
-**Recommendation**: Option A. It's the right abstraction — each agent type knows its own CLI interface.
+func (s *APIInputSender) SendInput(text string) error {
+    // POST to agent's sendMessage() API
+    return httpPost(s.endpoint+"/sendMessage", text)
+}
+```
 
-### `internal/cmd/ls.go`
+The adapter's `PrepareForLaunch` can return a custom `InputSender` if the agent type supports it. Otherwise the default `PTYInputSender` is used.
 
-No changes needed. `ls.go` queries agent status via the Unix socket protocol, which is agent-type-agnostic. The `AgentInfo` struct already carries all the relevant fields, and fields that don't apply to Codex (like hook data, OTEL metrics) will simply be zero-valued/omitted.
+Message delivery (`message/delivery.go`) calls `InputSender.SendInput()` instead of writing directly to the PTY. This is a small refactor with a big payoff — it decouples message delivery from the transport mechanism.
 
-### `internal/cmd/stop.go` and `internal/cmd/attach.go`
+## 7. AgentType — Simplified Interface
 
-No changes needed. These operate on the Unix socket and PTY layer, which are agent-type-independent.
+```go
+type AgentType interface {
+    Name() string
+    Command() string
+    DisplayCommand() string
+    NewAdapter(log *activitylog.Logger) adapter.AgentAdapter
+    RoleArgs(role *config.Role) []string
+}
+```
 
-### `internal/cmd/peek.go`
+The old `Collectors()`, `OtelParser()`, `ChildEnv()`, and `PrependArgs()` methods are gone — all encapsulated by the adapter.
 
-Significant changes needed. `peek.go` is currently hardcoded to parse Claude Code's session JSONL format (`sessionRecord` with type "assistant", `contentBlock` with tool_use, etc.). This format is specific to Claude Code.
+`RoleArgs` maps role config to agent-specific CLI flags:
+- Claude: `["--model", model, "--append-system-prompt", instructions, ...]`
+- Codex: `["--model", model, "--full-auto"]`
 
-Options:
-1. **Make peek agent-type-aware**: Query the agent's type via status, then dispatch to the appropriate log parser.
-2. **Skip peek for Codex initially**: Return "peek not supported for codex agents" until we understand Codex's log format.
-3. **Generic PTY log**: h2 could record raw PTY output to a log file and `peek` could show that for non-Claude agents.
+## 8. Socket & Daemon
 
-**Recommendation**: Option 2 for MVP, with option 1 as a follow-up. The `peek` command should check agent type from session metadata and return a clear error for unsupported types. If/when we add the JSONL stream collector for Codex, we can also add a Codex-specific peek formatter.
+No changes to the Daemon socket listener. It dispatches by `req.Type`:
 
-Changes to `peek.go`:
-- When resolving the log path from an agent name, check `meta.Command` (or add an `AgentType` field to `SessionMetadata`).
-- If the agent type is "codex", return "peek is not yet supported for Codex agents".
+- `"send"` → `InputSender.SendInput()` (via message queue)
+- `"hook_event"` → `adapter.HandleHookEvent(name, payload)`
+- `"status"` → queries `AgentMonitor` for state/metrics
+- `"attach"`, `"show"`, `"stop"` → unchanged
 
-## 4. Role Configuration
+## 9. Role Configuration
 
-### Role YAML
-
-The existing `agent_type` field in `Role` (default: "claude") already supports arbitrary strings. A Codex role would look like:
+### Codex role example
 
 ```yaml
 name: codex-dev
 agent_type: codex
-model: o3       # Codex --model flag
+model: o3
 instructions: |
   You are a coding agent. Write clean, tested code.
 working_dir: ~/code/myproject
+extra_args: ["--full-auto"]
 ```
 
-### Agent-type-specific role fields
+Claude-specific fields (`claude_config_dir`, `hooks`, `settings`, `permission_mode`) are ignored with a warning when `agent_type` is not "claude".
 
-Some role fields are Claude-specific:
-- `claude_config_dir` — only relevant for Claude Code
-- `permission_mode` — Claude-specific concept
-- `permissions.allow/deny` — Claude-specific
-- `hooks` — Claude Code hooks
-- `settings` — Claude Code settings.json
+## 10. Peek Support
 
-These should be ignored (with a warning) when `agent_type` is not "claude". The `Role.Validate()` method should warn (not error) if Claude-specific fields are set with a non-Claude agent type.
+### Unified event store approach
 
-### Codex-specific role fields
+Peek reads from h2's **event store** (`shared/eventstore/`) instead of parsing agent-native log formats directly. The `AgentMonitor` writes every `AgentEvent` to the store as it processes events in real-time. This means:
 
-Codex has its own configuration that doesn't map to existing Claude fields:
-- `--full-auto` vs `--suggest` vs `--ask` (approval modes)
-- `--cd` (working directory, already handled by `working_dir`)
-- `--ephemeral` (don't save session)
+- Peek works the same way for all agent types — it reads `AgentEvent` JSONL from h2's session directory
+- No dependency on the agent's native log format, rotation, or file layout
+- Data is available even after the agent process exits (it was written in real-time)
+- h2 controls the schema and can add new event types without breaking existing stores
 
-We have a few options:
-1. **Generic `args` field**: Add `extra_args: ["--full-auto"]` to Role. Works for any agent type.
-2. **Codex-specific section**: Add a `codex:` block to Role for Codex-specific config. More structured but tightly coupled.
-3. **Map existing role concepts**: Map `permission_mode` to Codex approval modes (`dontAsk` → `--full-auto`, `default` → `--suggest`).
+### What peek shows
 
-**Recommendation**: Option 1 (generic `extra_args`) for MVP. It's the most flexible and doesn't require schema changes per agent type. Option 3 is a nice follow-up for a more polished experience.
+Peek reconstructs a conversation summary from stored `AgentEvent`s:
+- `EventAgentMessage` — assistant response text
+- `EventToolStarted` / `EventToolCompleted` — tool calls with names, duration, success
+- `EventTurnCompleted` — token counts per turn
+- `EventApprovalRequested` — permission prompts
 
-## 5. h2 Messaging
+### Per-agent richness
 
-### How Claude Code receives messages
+The richness of peek depends on what the adapter captures:
 
-Currently, h2 delivers messages by writing text to the agent's PTY stdin. For Claude Code, this works because Claude's prompt accepts text input, and messages are formatted as `[h2 message from: sender] body`.
+**Claude Code**: The session log collector tails Claude's native JSONL and emits `EventAgentMessage` events with full assistant message text. Combined with OTEL metrics and hook state, peek shows a rich conversation view.
 
-### How Codex receives messages
+**Codex**: OTEL events include `codex.tool_result` (with output) and `codex.user_prompt` (with prompt text), so peek can show turns, tool calls, and token counts. Full assistant message text is not available via OTEL — a Codex session log collector (Phase 3) would add that.
 
-Codex interactive mode also accepts text input in its prompt. The same PTY-based delivery mechanism should work:
-- The delivery loop writes `[h2 message from: sender] Read /path/to/msg.md\r` to the PTY
-- Codex receives it as user input
+### Fallback
 
-However, there are two concerns:
+For any agent type that doesn't yet have a rich adapter, peek can show a minimal view: state transitions, turn boundaries, and token counts (from whatever the adapter does emit). This is strictly better than "peek not supported".
 
-1. **Idle detection for delivery**: The delivery loop in `message/delivery.go` waits for the agent to be idle before delivering normal-priority messages. With only `OutputCollector`, idle means "no PTY output for 2 seconds". This is coarser than Claude's hook-based idle detection but should work acceptably — Codex's prompt waits for input when idle, producing no output.
+## 11. Codex OTEL Details
 
-2. **`codex exec` mode**: If Codex is running in `exec` mode (non-interactive, processes a single prompt and exits), there's no ongoing prompt to deliver messages to. This is inherently incompatible with the message delivery model. For `exec` mode, h2 would need to either:
-   - Queue messages and deliver them on relaunch
-   - Not support messaging for exec-mode agents
+### Configuring the exporter
 
-**Recommendation**: Focus on Codex's interactive mode for messaging. The existing PTY-based delivery works without changes. Document that `codex exec` is a one-shot mode where messaging is limited to priority/interrupt messages (which send Ctrl+C first).
+```bash
+codex -c 'otel.trace_exporter={type="otlp-http",endpoint="http://127.0.0.1:XXXX"}' ...
+```
 
-### How Codex sends messages
+Auth credentials live in `$CODEX_HOME/.credentials.json`, completely unaffected.
 
-For sending messages (`h2 send`), Codex agents work the same as Claude Code — the `h2 send` CLI is available as a shell command that the agent can execute via its tool use. The `h2` binary is in the PATH, and the `H2_ACTOR` env var is set so the agent knows its own name.
+### Session ID discovery
 
-The system prompt/instructions should tell Codex agents about the `h2 send` command, just as they do for Claude Code agents.
+Codex generates `ThreadId` (UUID v7) internally. h2 discovers it from the first `codex.conversation_starts` OTEL event (`conversation.id` field). Per-agent OTEL ports make correlation trivial.
 
-## 6. Peek Support
+### Full OTEL event catalog
 
-### Current state
+| Event Name | Key Fields | Description |
+|---|---|---|
+| `codex.conversation_starts` | `conversation.id`, `model`, `slug`, `approval_policy`, `sandbox_policy`, `mcp_servers` | Session init |
+| `codex.user_prompt` | `prompt_length`, `prompt` | User input |
+| `codex.api_request` | `duration_ms`, `status_code`, `attempt` | HTTP API call |
+| `codex.websocket_request` | `duration_ms`, `success` | WebSocket connection |
+| `codex.websocket_event` | `event.kind`, `duration_ms`, `success` | WebSocket message |
+| `codex.sse_event` | `event.kind`, `duration_ms` | SSE stream event |
+| `codex.sse_event` (completed) | `input_token_count`, `output_token_count`, `cached_token_count`, `reasoning_token_count`, `tool_token_count` | Response with tokens |
+| `codex.tool_decision` | `tool_name`, `call_id`, `decision`, `source` | Tool approval decision |
+| `codex.tool_result` | `tool_name`, `call_id`, `arguments`, `duration_ms`, `success`, `output` | Tool execution result |
 
-`peek.go` reads Claude Code's session JSONL log file, which contains structured records of assistant messages, tool calls, and text output. The path is resolved via `config.ClaudeCodeSessionLogPath()`, which uses the Claude config dir and session ID to find the log file.
+All events include: `conversation.id`, `app.version`, `auth_mode`, `originator`, `model`, `slug`.
 
-### Codex differences
+### Codex hooks
 
-Codex doesn't produce the same JSONL format. Its `--json` output is a different schema entirely (thread/turn/item events). And in interactive mode, it may not produce structured logs at all.
+Codex has `AfterAgent` and `AfterToolUse` hooks (post-event only). The same data is in OTEL events, so h2 relies on OTEL alone.
 
-### Plan
+## 12. Implementation Order
 
-1. **Add `AgentType` field to `SessionMetadata`** (in `internal/config/session.go`). Set it when writing metadata in `daemon.go`.
+### Phase 1: Adapter infrastructure (pure refactor, Claude Code only)
 
-2. **`peek.go` dispatch**:
-   ```go
-   meta, err := config.ReadSessionMetadata(sessionDir)
-   // ...
-   switch meta.AgentType {
-   case "claude", "":  // "" for backward compat
-       return formatClaudeSessionLog(meta.ClaudeCodeSessionLogPath, numLines, messageChars)
-   case "codex":
-       return nil, fmt.Errorf("peek is not yet supported for Codex agents")
-   default:
-       return nil, fmt.Errorf("peek not supported for agent type %q", meta.AgentType)
-   }
-   ```
+1. Create `monitor/` package — `AgentEvent` types, `State`/`SubState` (moved from `collector/`)
+2. Create `adapter/` package — `AgentAdapter` interface, `InputSender`, `LaunchConfig`
+3. Create `shared/otelserver/` — extract from existing `Agent.StartOtelCollector()`
+4. Create `shared/outputcollector/` — extract from existing `collector.OutputCollector`
+5. Create `shared/eventstore/` — unified AgentEvent JSONL writer/reader
+6. Build `adapter/claude/` — wrap existing hook handler + OTEL parser + session log collector
+7. Build `AgentMonitor` — consumes `AgentEvent`s, updates state/metrics, writes to event store
+8. Refactor `Agent` struct to use `AgentMonitor` + adapter
+9. Refactor peek to read from event store instead of Claude's native session JSONL
+10. Add `InputSender` with `PTYInputSender` default
+11. Verify all existing tests pass
 
-3. **Future**: If we add the JSONL stream collector that captures Codex events to a log file, add a `formatCodexSessionLog()` function that parses the Codex JSONL schema.
+### Phase 2: Codex agent type
 
-## 7. Metrics
+1. `CodexType` struct + `ResolveAgentType("codex")` + unit tests
+2. `adapter/codex/` — OTEL trace parser for Codex events
+3. `CodexAdapter.PrepareForLaunch()` — generates `-c otel.trace_exporter=...` args
+4. Codex `RoleArgs` mapping
+5. Peek works automatically via event store (shows turns, tools, tokens from OTEL events)
+6. Integration test with mock Codex binary
 
-### What Claude Code provides via OTEL
-- Token counts (input, output, cache)
-- Cost (USD)
-- Per-model breakdowns
-- API request counts
-- Tool result events with tool names
-- Lines added/removed
+### Phase 3: Polish
 
-### What Codex can provide
+1. Role validation warnings for cross-agent-type field misuse
+2. Codex session log collector — tail Codex's native logs for full assistant message text in peek
+3. Richer `InputSender` implementations as needed
 
-Without OTEL or hooks, Codex agents initially have **no metrics** beyond what the OutputCollector provides (active/idle state).
+## 13. Open Questions
 
-### Future metrics from JSONL stream
+1. **Codex OTEL exporter config shape**: Need to verify the exact TOML syntax for `-c otel.trace_exporter=...` with `otlp-http` type.
 
-If we build the JSONL stream collector (Phase 2 from section 2), Codex's structured output includes:
-- `turn.completed` events with usage stats (if Codex reports them)
-- Command execution events (what tools were used)
-- File change events
+2. **Codex interactive mode**: Confirm PTY stdin text is treated as user input for messaging.
 
-### What to show in `h2 list`
+3. **`codex exec` mode**: One-shot mode is incompatible with persistent agents. Support as fire-and-forget, or interactive-only?
 
-For Codex agents, `h2 list` will show:
-- Agent name, command, state (active/idle/exited), uptime
-- No token/cost metrics (these fields are omitted when zero)
-- No hook data (last tool, permission blocks)
+4. **Approval mode mapping**: How does `permission_mode` map to Codex's `--full-auto` / `--suggest` / `--ask`?
 
-This is the same as `GenericType` agents today, which is acceptable for MVP.
+5. **Auth checking**: Should h2 check Codex auth status on launch?
 
-## 8. Testing Strategy
+6. **InputSender scope**: Should it live on the adapter interface directly, or be a separate concern returned by `PrepareForLaunch`?
 
-### Unit tests
-
-1. **`agent_type_test.go`**: Add tests for `CodexType`:
-   - `Name()` returns "codex"
-   - `Command()` returns "codex"
-   - `Collectors()` returns empty set
-   - `OtelParser()` returns nil
-   - `PrependArgs()` returns nil
-   - `ChildEnv()` returns nil
-   - `ResolveAgentType("codex")` returns `*CodexType`
-
-2. **`role_test.go`**: Add tests for Codex role loading:
-   - Role with `agent_type: codex` loads correctly
-   - `GetAgentType()` returns "codex"
-
-3. **`session_test.go`**: Test that a session created with command "codex" uses `CodexType` and OutputCollector as primary.
-
-### Integration tests
-
-1. **Mock Codex binary**: Create a simple shell script or Go binary that mimics Codex's interactive behavior (prints a prompt, accepts input, echoes responses). Use it to test:
-   - Session creation and PTY setup
-   - Message delivery via PTY
-   - Idle detection via OutputCollector
-   - Agent info reporting via status socket
-
-2. **Role-based launch**: Test `h2 run --role codex-dev` with a Codex role file.
-
-### What NOT to test in MVP
-
-- JSONL stream parsing (Phase 2)
-- Codex-specific peek formatting (Phase 2)
-- Codex-specific metrics (Phase 2)
-
-## 9. Implementation Order
-
-1. **`CodexType` struct** + `ResolveAgentType` update + unit tests
-2. **`RoleArgs()` interface method** + implementations for Claude and Codex + update `childArgs()`
-3. **`SessionMetadata.AgentType`** field + write it in `daemon.go`
-4. **`peek.go`** agent-type dispatch
-5. **Role validation warnings** for Claude-specific fields on non-Claude agents
-6. **Documentation**: Update `docs/agent-roles.md` with Codex role examples
-
-## 10. Open Questions
-
-1. **Does Codex interactive mode produce structured logs?** If so, where? This determines whether a JSONL collector is feasible without the `--json` flag.
-
-2. **How does Codex handle stdin in interactive mode?** We need to confirm that the PTY-based message delivery pattern works — that pasting text into Codex's prompt is treated as user input.
-
-3. **Should we support `codex exec` as a different mode?** `exec` is one-shot and may be useful for pod-based orchestration where you want to fire-and-forget tasks. But it's fundamentally different from the persistent agent model.
-
-4. **How should `--full-auto` map to role config?** Is it a Codex-specific field, or should we extend the generic `permission_mode` concept?
-
-5. **Auth**: Codex uses `codex login` for authentication. Should h2 provide auth checking similar to `IsClaudeConfigAuthenticated()`? This would go in the `CodexType` or as a standalone function.
+7. **Codex session logs**: Does Codex write durable session logs to disk? If so, what format and where? This determines feasibility of a Codex session log collector for rich peek (Phase 3). Need to investigate Codex's rollout/history storage.
