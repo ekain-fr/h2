@@ -305,6 +305,12 @@ func resolvePrefix(rootDir string, desired string, h2Path string, existing []Rou
 	// Use the desired prefix, defaulting to the directory basename.
 	if desired == "" {
 		desired = filepath.Base(h2Path)
+		// Strip leading dots from dotfile basenames (e.g. ".h2" → "h2")
+		// so the prefix passes validation.
+		desired = strings.TrimLeft(desired, ".")
+		if desired == "" {
+			desired = "h2"
+		}
 	}
 
 	prefixSet := make(map[string]bool, len(existing))

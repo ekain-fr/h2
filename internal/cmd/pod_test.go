@@ -32,7 +32,6 @@ func setupPodTestEnv(t *testing.T) string {
 
 	t.Setenv("HOME", tmpDir)
 	t.Setenv("H2_ROOT_DIR", filepath.Join(tmpDir, ".h2"))
-	t.Setenv("H2_DIR", "")
 
 	h2Root := filepath.Join(tmpDir, ".h2")
 	os.MkdirAll(filepath.Join(h2Root, "sockets"), 0o700)
@@ -42,6 +41,8 @@ func setupPodTestEnv(t *testing.T) string {
 	os.MkdirAll(filepath.Join(h2Root, "sessions"), 0o755)
 	os.MkdirAll(filepath.Join(h2Root, "claude-config", "default"), 0o755)
 	config.WriteMarker(h2Root)
+
+	t.Setenv("H2_DIR", h2Root)
 
 	return h2Root
 }

@@ -374,10 +374,16 @@ func TestIsClaudeConfigAuthenticated(t *testing.T) {
 func TestRole_GetClaudeConfigDir(t *testing.T) {
 	ResetResolveCache()
 	t.Cleanup(ResetResolveCache)
-	// Use a fixed path for HOME so test expectations are deterministic.
+
+	// Create a real temp h2 dir so ResolveDir works (walk-up from CWD
+	// would otherwise find the real h2 dir).
+	h2Dir := t.TempDir()
+	WriteMarker(h2Dir)
+	t.Setenv("H2_DIR", h2Dir)
+
+	// Use a fixed path for HOME so tilde expansion tests are deterministic.
 	t.Setenv("HOME", "/Users/testuser")
 	t.Setenv("H2_ROOT_DIR", "/Users/testuser/.h2")
-	t.Setenv("H2_DIR", "")
 	t.Setenv("H2_ACTOR", "")
 
 	tests := []struct {
@@ -388,7 +394,7 @@ func TestRole_GetClaudeConfigDir(t *testing.T) {
 		{
 			name:            "default when not specified",
 			claudeConfigDir: "",
-			want:            "/Users/testuser/.h2/claude-config/default",
+			want:            filepath.Join(h2Dir, "claude-config", "default"),
 		},
 		{
 			name:            "absolute path",

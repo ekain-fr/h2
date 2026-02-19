@@ -62,12 +62,13 @@ func TestStopCmd_SendsStopRequest(t *testing.T) {
 
 	t.Setenv("HOME", tmpDir)
 	t.Setenv("H2_ROOT_DIR", filepath.Join(tmpDir, ".h2"))
-	t.Setenv("H2_DIR", "")
 
 	h2Root := filepath.Join(tmpDir, ".h2")
 	sockDir := filepath.Join(h2Root, "sockets")
 	os.MkdirAll(sockDir, 0o700)
 	config.WriteMarker(h2Root)
+
+	t.Setenv("H2_DIR", h2Root)
 
 	// Create a mock socket that handles the stop request.
 	sockPath := filepath.Join(sockDir, socketdir.Format(socketdir.TypeAgent, "a"))

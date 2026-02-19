@@ -8,6 +8,7 @@ import (
 
 	"h2/internal/bridgeservice"
 	"h2/internal/config"
+	"h2/internal/tmpl"
 )
 
 const conciergeSessionName = "concierge"
@@ -78,7 +79,12 @@ to route to an existing agent without spawning a new session.`,
 			}
 
 			// Setup and fork the concierge session from the role.
-			role, err := config.LoadRole(roleName)
+			ctx := &tmpl.Context{
+				AgentName: conciergeSessionName,
+				RoleName:  roleName,
+				H2Dir:     config.ConfigDir(),
+			}
+			role, err := config.LoadRoleRendered(roleName, ctx)
 			if err != nil {
 				return fmt.Errorf("concierge role not found; create one with: h2 role init concierge")
 			}

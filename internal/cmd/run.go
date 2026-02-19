@@ -38,7 +38,8 @@ By default, uses the "default" role from ~/.h2/roles/default.yaml.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Safety check: when running inside a Claude Code session,
 			// require --detach to prevent hijacking the parent's terminal.
-			if os.Getenv("CLAUDECODE") != "" && !detach {
+			// Skip for --dry-run since it doesn't launch anything.
+			if os.Getenv("CLAUDECODE") != "" && !detach && !dryRun {
 				return fmt.Errorf("running inside a Claude Code session (CLAUDECODE is set); use --detach to avoid hijacking the parent terminal")
 			}
 

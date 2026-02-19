@@ -102,7 +102,7 @@ func setupMockAgent(t *testing.T, tmpDir, agentName string) *mockHookAgent {
 	sockPath := filepath.Join(sockDir, socketdir.Format(socketdir.TypeAgent, agentName))
 	t.Setenv("HOME", tmpDir)
 	t.Setenv("H2_ROOT_DIR", h2Root)
-	t.Setenv("H2_DIR", "")
+	t.Setenv("H2_DIR", h2Root)
 	return newMockHookAgent(t, sockPath)
 }
 
