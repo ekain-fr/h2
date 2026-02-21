@@ -15,6 +15,8 @@ Detailed architectural analysis of the h2 agent runner, generated February 2026.
 | 06 | [Bridge and Telegram](06-bridge-and-telegram.md) | Bridge interfaces, bridge service daemon, Telegram long-polling, macOS notifications, routing |
 | 07 | [Communication Channels](07-communication-channels.md) | **Focus**: All bidirectional communication paths -- PTY, OTEL, hooks, Unix sockets, Telegram |
 | 08 | [Agent Runner](08-agent-runner.md) | **Focus**: Full agent launch flow, process isolation, control operations, lifecycle management, pods |
+| 09 | [OpenClaw vs h2 Comparison](09-comparison-openclaw-vs-h2.md) | Comparison of OpenClaw and h2 orchestration approaches |
+| 10 | [Subagent Options](10-subagents-options.md) | **Focus**: Task-scoped agent execution -- Claude Code Task tool vs h2 daemons vs hybrid, overhead analysis, completion detection, recommendations |
 
 ## Codebase Statistics
 
